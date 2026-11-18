@@ -54,3 +54,37 @@ def test_raw_native_methods_diagnostics_resume(tmp_path):
         with (tmp_path / 'results/collected/decision_methods.tsv').open() as handle:
             methods = list(csv.DictReader(handle, delimiter='\t'))
         assert len(methods) == 4
+
+
+def test_failed_score_audit_survives_scratch_cleanup(tmp_path):
+    import base64
+    spec, _ = _fixture(tmp_path)
+    spec['error'] = 'Synthetic failure for scratch audit validation'
+    payload = base64.b64encode(json.dumps(spec).encode()).decode()
+    scratch = tmp_path/'scratch'
+    scratch.mkdir()
+    main = tmp_path/'failure.nf'
+    main.write_text(f"""include {{ RAW_QUERY_SCORE }} from '{ROOT}/modules/local/raw_query_score/main'
+workflow {{
+    queries = channel.of(tuple([id: 'q00000001'], '{payload}', []))
+    RAW_QUERY_SCORE(queries, channel.value(files('{ROOT}/bin/*.py')))
+}}
+""")
+    config = tmp_path/'failure.config'
+    config.write_text(f"""process.executor='local'
+conda.enabled=false
+process.scratch='{scratch}'
+process.errorStrategy='ignore'
+workflow.failOnIgnore=true
+process.shell=['/bin/bash','-euo','pipefail']
+env.PATH='{Path(sys.executable).parent}:'+System.getenv('PATH')
+""")
+    command = [NEXTFLOW, '-C', str(config), 'run', str(main), '-work-dir', str(tmp_path/'work')]
+    result = subprocess.run(command, cwd=tmp_path, text=True, capture_output=True,
+                            env=dict(os.environ, NXF_SYNTAX_PARSER='v2'), timeout=120)
+    (tmp_path/'failure-console.log').write_text(result.stdout+result.stderr)
+    assert result.returncode != 0
+    audits = list((tmp_path/'work').rglob('failure_audit/summary.json'))
+    assert len(audits)==1, result.stdout+result.stderr
+    assert json.loads(audits[0].read_text())['error']==spec['error']
+    assert not list(scratch.rglob('summary.json'))
