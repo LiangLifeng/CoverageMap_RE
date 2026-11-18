@@ -1,3 +1,5 @@
+> CoverageMap_RE vNext 1.2.1: see [integration status and NHB test handoff](docs/RAW_QUERY_VNEXT_HANDOFF.md). Formal NHB acceptance remains pending.
+
 # CoverageMap
 
 ## Automatic whole-GCF reference batches

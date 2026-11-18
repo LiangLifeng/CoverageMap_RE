@@ -27,7 +27,7 @@ from bin.query_decision_methods import parse_methods, validate_options, COLUMNS 
 from bin.query_manifest import DISTRIBUTION_COLUMNS
 from bin.raw_query_outputs import legacy_outputs, unscored_outputs, read_rows
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 SUMMARY = ("query_id", "Sample", "GCFID", "status", "error", "arm", "manifest_depth",
            "actual_query_depth", "available_count", "eligible_count", "requested_draws",
            "valid_draws", "unique_references", "duplicate_draws", "decoded_reference_files",
@@ -137,7 +137,7 @@ def plan(args):
     mapping = fai_mapping(args.fai_map)
     config = dict(reference_draws=args.reference_draws, alpha=args.alpha, seed=args.seed,
                   sampling_tolerance_bp=getattr(args, "sampling_tolerance_bp", 150),
-                  geometry_cache_dir=str(getattr(args, "geometry_cache_dir", None)) if getattr(args, "geometry_cache_dir", None) else None,
+                  geometry_cache_dir=str(Path(args.geometry_cache_dir).expanduser().resolve()) if getattr(args, "geometry_cache_dir", None) else None,
                   depth_threshold=args.depth_threshold, bin_count=args.bin_count,
                   window_size=args.window_size, sampling_unit=args.sampling_unit,
                   min_mapq=args.min_mapq, jaccard_coverage_threshold=args.jaccard_coverage_threshold,
@@ -354,6 +354,7 @@ def calculate(spec, output, *, extractor=extract_once):
                 audit["query_similarity_calculations"] = 1
             for number in slots:
                 draw = draws[number]
+                draw['geometry_cache_hit'] = cache_hit
                 if full is None:
                     generator, _ = rng(config["seed"], qid, query["Sample"], query["GCFID"], "read-units", number)
                     arm = draw_arms[number]

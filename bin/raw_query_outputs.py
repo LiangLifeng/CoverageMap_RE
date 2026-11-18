@@ -22,7 +22,7 @@ def legacy_outputs(output, summary, draws, query, test, matrix, breadth, covered
     numeric_query = dict(query, query_id=summary["query_id"])
     extra, *_ = write_sensitivity(output, canonical_summary, canonical_draws,
                                   test, matrix, breadth, covered, edges, config,
-                                  numeric_query, primary_nulls)
+                                  numeric_query, primary_nulls, draw_columns=RAW_DRAW_COLUMNS)
     summary.update(extra)
     null_rows = [dict(metric=key, left_draw=i, right_draw="", value=value,
                       left_reference_id=draws[i]["reference_id"],

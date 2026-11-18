@@ -1,3 +1,5 @@
+> The catalog-backed vNext path and shared-cache behavior are superseded by [Raw Query vNext 1.2.1](RAW_QUERY_VNEXT_HANDOFF.md). Legacy CRAM-only behavior below remains available.
+
 # Raw CRAM per-query Nextflow v1.1
 
 All user-required legacy query options/outputs are now specified by

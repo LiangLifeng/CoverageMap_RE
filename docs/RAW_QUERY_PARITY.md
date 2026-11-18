@@ -1,3 +1,5 @@
+> The catalog-backed vNext path and shared-cache behavior are superseded by [Raw Query vNext 1.2.1](RAW_QUERY_VNEXT_HANDOFF.md). Legacy CRAM-only behavior below remains available.
+
 # Raw query legacy feature parity — v1.1.0
 
 Authoritative feature baseline: native-resume-reference-draws-20261113/code/main.nf,

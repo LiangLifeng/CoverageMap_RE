@@ -226,3 +226,14 @@ and collected ledgers are restored atop SQL, one-query processes and decode reus
 Acceptance includes original-function method/threshold/plot and split-read oracle
 checks, option forwarding, real synthetic Nextflow diagnostics and native resume.
 
+
+
+## CoverageMap_RE vNext integration — 2026-11-18
+
+Continue migrated db11a9f on a local feature branch. Preserve the existing pooled
+N-slot row-mean null, Normal/Pearson AND and optional methods. Connect mate-aware
+whole-unit tolerance sampling and shared geometry through threshold outputs and
+Diagnostics. Cache is disposable, policy/source/reference keyed, and must not
+change frozen scientific arrays. Validate locally with synthetic BAM/CRAM, dense
+selected-unit oracles, all methods/grid, cold/warm/corrupt cache, low/high and
+read/fragment. Formal NHB Nextflow/resume/data tests remain user-owned.

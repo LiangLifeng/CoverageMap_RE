@@ -122,3 +122,170 @@ def test_fasta_m5_disagreement_is_strict(tmp_path):
     output.mkdir()
     with pytest.raises(ValueError, match="Input changed"):
         calculate(spec, output)
+
+
+@pytest.mark.parametrize('encoding', ['bam', 'cram'])
+@pytest.mark.parametrize('unit', ['read', 'fragment'])
+@pytest.mark.parametrize('branch', ['low', 'high'])
+def test_vnext_frozen_outputs_dense_and_cache(tmp_path, unit, branch, encoding):
+    import gzip
+    from bin.coverage_core import canonical_reference, read_reference, dense_coverage
+    from bin.raw_cram_pool import extract_once
+    from bin.raw_cram_query import rng
+    from bin.raw_query_sampling import query_arms, compatible_reference_ids
+    from bin.query_manifest_stats import low_null, aggregate, similarity
+    spec, _ = _fixture(tmp_path)
+    if encoding == 'cram':
+        for source in [spec['query']['CramPath'], spec['references'][0]['CramFilePath']]:
+            with pysam.AlignmentFile(source, 'rb') as bam:
+                reads = list(bam.fetch(until_eof=True))
+                header = bam.header
+            with pysam.AlignmentFile(source, 'wc', header=header, format_options=[b'no_ref=1']) as cram:
+                for read in reads:
+                    cram.write(read)
+            from bin.raw_cram_query import stamp
+            spec['stamps'][source] = stamp(source)
+    spec['arm'] = branch
+    spec['config'].update(sampling_unit=unit, reference_draws=11,
+                          jaccard_methods='normal,empirical,minimum,bootstrap',
+                          jaccard_coverage_thresholds='default')
+    spec['choices'].append(spec['choices'][0])
+    root = tmp_path / 'cold'
+    root.mkdir()
+    summary = calculate(spec, root)
+    layout = canonical_reference(read_reference(spec['fna']))
+    query, _, _ = extract_once(spec['query']['CramPath'], layout, sampling_unit=unit,
+                               strict_reference=True)
+    ref, _, _ = extract_once(spec['references'][0]['CramFilePath'], layout,
+                             sampling_unit=unit, strict_reference=True)
+    arms = query_arms(query, unit, 11)
+    assigned = [a for a in arms for _ in range(a.slots)]
+    matrix = np.load(root / 'reference_windows.npy')
+    covered = np.load(root / 'reference_covered_bases.npy')
+    with gzip.open(root / 'draws.tsv.gz', 'rt') as handle:
+        draws = list(csv.DictReader(handle, delimiter='\t'))
+    numeric = []
+    for i, draw in enumerate(draws):
+        if branch == 'low':
+            arm = assigned[i]
+            generator, _ = rng(401, spec['query_id'], 'query', 'GCF_1.1', 'read-units', i)
+            selected = select_nearest_units(ref, compatible_reference_ids(ref, arm.mate_side),
+                                             generator, arm.target_bases, 150)
+            ids, qids = selected.indices, arm.query_ids
+        else:
+            ids, qids = np.arange(len(ref)), np.arange(len(query))
+        dense = dense_coverage(ref, ids)
+        qdense = dense_coverage(query, qids)
+        np.testing.assert_array_equal(matrix[i], dense)
+        np.testing.assert_array_equal(covered[i], dense > 0)
+        values = similarity(qdense, dense)
+        assert float(draw['jaccard']) == pytest.approx(values['jaccard'])
+        assert float(draw['pearson']) == pytest.approx(values['pearson'])
+        numeric.append(dict(draw, jaccard=float(draw['jaccard']), pearson=float(draw['pearson'])))
+    expected = aggregate(numeric, low_null(matrix, covered=covered, lengths=np.ones(400, dtype=np.int64)),
+                         'low', 11, stable_tail=True)
+    actual = json.loads((root / 'statistics.json').read_text())
+    for metric in expected:
+        if expected[metric]['p'] is None:
+            assert actual[metric]['p'] is None
+        else:
+            assert actual[metric]['p'] == pytest.approx(expected[metric]['p'])
+    warm = tmp_path / 'warm'
+    warm.mkdir()
+    cached = calculate(spec, warm)
+    assert cached['decoded_reference_files'] == 0 and cached['geometry_cache_hits'] == 2
+    for name in ['reference_windows.npy', 'reference_covered_bases.npy', 'statistics.json',
+                 'sensitivity.tsv', 'decision_methods.tsv', 'query_windows.npy']:
+        assert (root / name).read_bytes() == (warm / name).read_bytes()
+    for row in draws:
+        assert row['geometry_cache_hit'] == 'False'
+    assert summary['valid_draws'] == 11
+    for directory in (root / 'jaccard_thresholds').iterdir():
+        with gzip.open(directory / 'draws.tsv.gz', 'rt') as handle:
+            threshold_draws = list(csv.DictReader(handle, delimiter='\t'))
+        assert [r['mate_side'] for r in threshold_draws] == [r['mate_side'] for r in draws]
+
+
+def test_out_of_tolerance_never_produces_a_decision(tmp_path):
+    spec, _ = _fixture(tmp_path)
+    spec['config'].update(sampling_tolerance_bp=0,
+                          jaccard_methods='normal,empirical,minimum,bootstrap')
+    output = tmp_path / 'result'
+    output.mkdir()
+    summary = calculate(spec, output)
+    assert summary['status'] == 'COMPLETE_WITH_GAPS'
+    assert summary['valid_draws'] == 5 and summary['out_of_tolerance_draws'] == 5
+    assert summary['detection_status'] == 'NOT_EVALUATED'
+    with (output / 'decision_methods.tsv').open() as handle:
+        assert all(r['detection_status'] == 'NOT_EVALUATED' for r in csv.DictReader(handle, delimiter='\t'))
+
+
+def test_fasta_m5_validation_after_replanning(tmp_path):
+    from bin.raw_cram_query import stamp
+    spec, _ = _fixture(tmp_path)
+    source = Path(spec['query']['CramPath'])
+    _bam(source, 'f' * 32)
+    spec['stamps'][str(source)] = stamp(source)
+    output = tmp_path / 'invalid-m5'
+    output.mkdir()
+    with pytest.raises(ValueError, match='M5 mismatch'):
+        calculate(spec, output)
+
+
+def test_cache_lock_corruption_and_source_change(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from bin.coverage_core import canonical_reference, read_reference
+    from bin.raw_cram_pool import extract_once
+    from bin.raw_geometry_cache import cached_extract
+    spec, _ = _fixture(tmp_path)
+    source = spec['query']['CramPath']
+    layout = canonical_reference(read_reference(spec['fna']))
+    cache = tmp_path / 'cache'
+    calls = []
+    def extract(path, ref, **policies):
+        calls.append(path)
+        return extract_once(path, ref, **policies)
+    def fetch(_):
+        return cached_extract(source, layout, extract, cache_dir=cache,
+                               sampling_unit='read', strict_reference=True)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(fetch, range(4)))
+    assert len(calls) == 1
+    assert sum(r[3] for r in results) == 3
+    assert all(r[0].sampling_unit == 'read' for r in results)
+    archive, = cache.glob('*.npz')
+    archive.write_bytes(b'broken disposable cache')
+    assert not fetch(0)[3] and len(calls) == 2
+    assert fetch(0)[3]
+    _bam(Path(source), hashlib.md5(b'A' * 400).hexdigest(), short_last=True)
+    assert not fetch(0)[3] and len(calls) == 3
+    changed_cache = tmp_path / 'changed-cache'
+    def changing(path, ref, **policies):
+        result = extract_once(path, ref, **policies)
+        Path(path).touch()
+        return result
+    with pytest.raises(ValueError, match='Input changed during'):
+        cached_extract(source, layout, changing, cache_dir=changed_cache,
+                       sampling_unit='read', strict_reference=True)
+    assert not list(changed_cache.glob('*.npz'))
+
+
+def test_vnext_diagnostics_preserves_mate_coverage(tmp_path):
+    from bin.raw_cram_query import table, SUMMARY
+    from bin.diagnostics import query_similarity_plot as plot
+    spec, _ = _fixture(tmp_path)
+    spec['config']['jaccard_methods'] = 'normal,empirical,minimum,bootstrap'
+    root = tmp_path / 'queries' / spec['query_id']
+    root.mkdir(parents=True)
+    summary = calculate(spec, root)
+    table(root / 'summary.tsv', SUMMARY, [summary])
+    row, = plot.read_table(root / 'summary.tsv', plot.IDENTITY)
+    coverage, reasons = plot.coverage_data(row, (root / 'null.tsv.gz', None))
+    assert not reasons
+    assert coverage['query_mate_mean'] == pytest.approx(46/400)
+    assert 'mate mean' in plot.coverage_label(coverage)
+    out = tmp_path / 'diagnostics'
+    assert plot.run(SimpleNamespace(summary=root/'summary.tsv', decision_methods=root/'decision_methods.tsv',
+        methods=spec['config']['jaccard_methods'], jobs=1, query_id=None, outdir=out,
+        null_root=root.parent, work_dir=None, staged_nulls=None, trace=None, stub=False)) == 0
+    assert len(list(out.rglob('*.png'))) == 4

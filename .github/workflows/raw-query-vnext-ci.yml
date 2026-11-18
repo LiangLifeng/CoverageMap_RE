@@ -1,0 +1,24 @@
+name: Raw Query vNext integration
+on:
+  push:
+    branches: [main, 'codex/raw-query-vnext-*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  raw-query:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt scipy matplotlib
+      - run: python -m compileall -q bin tests
+      - run: >-
+          python -m pytest -q
+          tests/test_raw_query_vnext.py tests/test_raw_cram_query.py
+          tests/test_raw_query_parity.py tests/test_raw_cram_index.py
+          tests/test_query_similarity_plot.py tests/test_jaccard_breadth.py
+          tests/test_query_decision_methods.py

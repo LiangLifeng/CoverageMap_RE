@@ -9,7 +9,7 @@ EXTRA = ('jaccard_coverage_threshold', 'query_covered_bins', 'jaccard_zero_union
 
 
 def write_sensitivity(output, summary, draws, test, matrix, query_covered, covered,
-                      edges, config, query, primary_nulls):
+                      edges, config, query, primary_nulls, *, draw_columns=None):
     from bin.query_manifest import table, DRAW_COLUMNS, NULL_COLUMNS, DISTRIBUTION_COLUMNS, SUMMARY_COLUMNS, high_null
     widths = np.diff(edges)
     grid = thresholds(config.get('jaccard_coverage_threshold',0.), config.get('jaccard_coverage_thresholds'))
@@ -93,7 +93,7 @@ def write_sensitivity(output, summary, draws, test, matrix, query_covered, cover
         row.update(jaccard_zero_union_count=len(qzero),jaccard_null_zero_union_count=zero_count[0],
                    jaccard_zero_union_fraction=len(qzero)/len(ready) if ready else None,
                    jaccard_null_zero_union_fraction=zero_count[0]/pair_count[0] if pair_count[0] else None)
-        table(directory/'draws.tsv.gz',DRAW_COLUMNS,scored)
+        table(directory/'draws.tsv.gz',draw_columns or DRAW_COLUMNS,scored)
         table(directory/'null.tsv.gz',NULL_COLUMNS,records)
         columns=DISTRIBUTION_COLUMNS if distribution else SUMMARY_COLUMNS
         table(directory/'summary.tsv',columns,[row])

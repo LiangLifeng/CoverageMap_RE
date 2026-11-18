@@ -9,12 +9,13 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import zipfile
 
 import numpy as np
 
 from bin.coverage_core import BlockPool, Reference, merge_references
 
-CACHE_SCHEMA = "raw-query-geometry-cache-1"
+CACHE_SCHEMA = "raw-query-geometry-cache-2"
 EXTRA = ("source_unit_ids", "unit_read_counts", "unit_segment_counts",
          "unit_fragment_ids", "unit_mate_sides")
 
@@ -40,10 +41,21 @@ def _read_cache(path, reference):
                          data["indptr"].copy(), reference.length)
         for field in EXTRA:
             setattr(pool, field, data[field].copy())
-        if any(len(getattr(pool, field)) != len(pool) for field in EXTRA):
+        if any(getattr(pool, field).ndim != 1 or
+               getattr(pool, field).dtype.kind not in 'iu' or
+               len(getattr(pool, field)) != len(pool) for field in EXTRA):
             raise ValueError("Incomplete geometry cache")
+        if (len(np.unique(pool.source_unit_ids)) != len(pool) or
+                np.any(pool.source_unit_ids < 0) or np.any(pool.unit_fragment_ids < 0) or
+                np.any(pool.unit_read_counts < 1) or
+                np.any(pool.unit_segment_counts < pool.unit_read_counts) or
+                not np.isin(pool.unit_mate_sides, [0, 1, 2]).all()):
+            raise ValueError("Invalid cached unit metadata")
         if int(pool.total_bases) != info["aligned_bases"]:
             raise ValueError("Geometry cache mass mismatch")
+        pool.sampling_unit = info['sampling_unit']
+        if pool.sampling_unit not in ('read', 'fragment'):
+            raise ValueError('Invalid cached sampling unit')
         layout = Reference(reference.names, reference.lengths, tuple(info["md5"]),
                            tuple(info["missing"]), reference.sort_policy)
         merge_references(reference, layout)
@@ -53,7 +65,7 @@ def _read_cache(path, reference):
 def _write_cache(path, pool, layout, missing):
     info = dict(schema=CACHE_SCHEMA, genome_len=pool.genome_len,
                 aligned_bases=int(pool.total_bases), md5=layout.md5,
-                missing=missing)
+                missing=missing, sampling_unit=pool.sampling_unit)
     fd, temporary = tempfile.mkstemp(prefix=".geometry-", suffix=".npz", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -82,8 +94,10 @@ def cached_extract(path, reference, extractor, cache_dir=None, **policies):
             try:
                 pool, layout, missing = _read_cache(archive, reference)
                 return pool, layout, missing, True
-            except (OSError, ValueError, KeyError, EOFError, json.JSONDecodeError):
+            except (OSError, ValueError, KeyError, EOFError, TypeError, zipfile.BadZipFile):
                 archive.unlink(missing_ok=True)
         pool, layout, missing = extractor(path, reference, **policies)
+        if geometry_key(path, reference, policies) != key:
+            raise ValueError('Input changed during geometry extraction')
         _write_cache(archive, pool, layout, missing)
         return pool, layout, missing, False

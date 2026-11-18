@@ -54,6 +54,8 @@ def query_arms(pool, sampling_unit, reference_draws):
 
 
 def compatible_reference_ids(pool, mate_side):
+    if mate_side not in ('both', 'unpaired', 'all', 'read1', 'read2'):
+        raise ValueError('Invalid mate side')
     if mate_side in ('both', 'unpaired', 'all'):
         return np.arange(len(pool), dtype=np.intp)
     roles = getattr(pool, 'unit_mate_sides', None)

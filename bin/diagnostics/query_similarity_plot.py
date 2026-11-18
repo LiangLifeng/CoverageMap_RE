@@ -16,7 +16,7 @@ from statistics import fmean, pstdev
 from tempfile import NamedTemporaryFile
 from textwrap import shorten
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 METRICS = {'jaccard': ('Jaccard similarity', 0.0), 'pearson': ('Pearson r', -1.0)}
 IDENTITY = ('query_id', 'Sample', 'GCFID')
 METRIC_FIELDS = ('mean', 'p', 'null_mean', 'null_sd', 'null_count', 'status', 'decision')
@@ -206,6 +206,16 @@ def coverage_data(row, source):
                 or sorted(slots) != list(range(len(draws)))):
             raise ValueError('Coverage arrays differ from saved draw/window layout')
         values = []
+        mate_path = path.parent/'query_mate_covered_bases.npy'
+        if mate_path.is_file():
+            mates = np.load(mate_path, allow_pickle=False)
+            if (mates.shape != (2, lengths.size) or mates.dtype.kind not in 'iu'
+                    or np.any(mates < 0) or np.any(mates > lengths)
+                    or any(d.get('mate_side') not in ('read1', 'read2') for d in draws)):
+                raise ValueError('Invalid mate-stratified coverage arrays/draws')
+            result['query_mate_mean'] = fmean(
+                int(mates[0 if d['mate_side']=='read1' else 1].sum(dtype=np.uint64))/length
+                for d in draws)
         for draw in draws:
             if draw['status'] != 'READY':
                 continue
@@ -227,7 +237,8 @@ def coverage_data(row, source):
 def coverage_label(data):
     def percent(value):
         return 'NA' if value is None else f'{100*value:.2f}%'
-    return (f"Coverage breadth (covered bp / full GCF bp): Query {percent(data['query'])}"
+    mate = (f" (mate mean {percent(data['query_mate_mean'])})" if 'query_mate_mean' in data else '')
+    return (f"Coverage breadth (covered bp / full GCF bp): Query {percent(data['query'])}{mate}"
             f"  |  Ref mean {percent(data['reference_mean'])}"
             f" [min {percent(data['reference_min'])}, max {percent(data['reference_max'])}]"
             f"; n={data['reference_n']}/{data.get('reference_expected', 100)}")
@@ -271,7 +282,9 @@ def render(row, panels, reasons, target, coverage=None):
                 ax.axvline(values[0], color=blue, linewidth=2)
                 ax.set_yticks([])
             else:
+                span = max(max(values)-min(values), .012)
                 ax.hist(values, bins=min(18, max(5, round(math.sqrt(len(values))))),
+                        range=(max(lower, min(values)-.1*span), min(1, max(values)+.1*span)),
                         density=True, color='#a8d4ec', edgecolor=blue, linewidth=.9)
             y = [.22 + ((i*37) % 101)/250 for i in range(len(values))]
             strip.scatter(values, y, s=11, color=blue, alpha=.54, linewidths=0, clip_on=False)
