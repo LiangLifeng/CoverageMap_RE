@@ -74,6 +74,7 @@ workflow {{
     config.write_text(f"""process.executor='local'
 conda.enabled=false
 process.scratch='{scratch}'
+process.ext.failure_audit_root='{tmp_path}/audits'
 process.errorStrategy='ignore'
 workflow.failOnIgnore=true
 process.shell=['/bin/bash','-euo','pipefail']
@@ -84,7 +85,7 @@ env.PATH='{Path(sys.executable).parent}:'+System.getenv('PATH')
                             env=dict(os.environ, NXF_SYNTAX_PARSER='v2'), timeout=120)
     (tmp_path/'failure-console.log').write_text(result.stdout+result.stderr)
     assert result.returncode != 0
-    audits = list((tmp_path/'work').rglob('failure_audit/summary.json'))
+    audits = list((tmp_path/'audits').rglob('summary.json'))
     assert len(audits)==1, result.stdout+result.stderr
     assert json.loads(audits[0].read_text())['error']==spec['error']
     assert not list(scratch.rglob('summary.json'))

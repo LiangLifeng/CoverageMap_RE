@@ -125,8 +125,8 @@ and work for -resume. The agent has not run formal NHB queries or Slurm jobs.
 
 ## Failure-audit retention repair — 2026-11-19
 
-RAW_QUERY_SCORE passes --failure-audit-dir pointing to its persistent task work
-directory. On ERROR, score copies only summary.json/tsv, draws.tsv,
+RAW_QUERY_SCORE passes --failure-audit-dir pointing to the persistent output failure_audits/query_id
+directory configured from launchDir and outdir. On ERROR, score copies only summary.json/tsv, draws.tsv,
 decode_audit.json and statistics.json before returning nonzero. Dense arrays and
 raw alignments are not copied. Successful output/scoring/cache semantics remain
 unchanged. This prevents scratch cleanup from removing the reason for failed
