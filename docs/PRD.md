@@ -190,3 +190,19 @@ Diagnostics. Cache is disposable, policy/source/reference keyed, and must not
 change frozen scientific arrays. Validate locally with synthetic BAM/CRAM, dense
 selected-unit oracles, all methods/grid, cold/warm/corrupt cache, low/high and
 read/fragment. Formal NHB Nextflow/resume/data tests remain user-owned.
+
+
+## Reference mate audit and configurable replacement — 2026-11-19
+
+User supplies BuildInput_all_virus_347993.csv plus c50_20261114 fna.csv/fai_path.csv
+for a new independent SQL catalog and read-label inventory. Keep every CSV row;
+never repair flags or silently filter source data. The mate-label CLI scans
+mapped primary reads at MAPQ0; it may stop after proving both labels present.
+Missing/one-sided/invalid/empty/error states require a complete scan and remain
+explicit; observed counts are not full read-count estimates. Full347993-file
+audit runs only in bounded NHB compute jobs; no full CRAM hashes or recopies.
+User supersedes earlier no-redraw choice: insufficient-reference behavior becomes
+external unscored|replace; this rerun selects replace, with per-slot replacement
+audit, deterministic RNG, complete-unit sampling, unchanged150bp tolerance and
+1000-slot denominator. Unlabelled-reference compatibility remains a separate
+user choice. Deliver prior49-query/152capacity-slot detailed tables as well.
