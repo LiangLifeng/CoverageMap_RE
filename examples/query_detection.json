@@ -1,0 +1,16 @@
+{
+  "bacteria": [
+    {"min_genome_bp": 0, "max_genome_bp_exclusive": 2000000, "bin_count": 3, "distance": "correlation", "max_distance": null},
+    {"min_genome_bp": 2000000, "max_genome_bp_exclusive": 3000000, "bin_count": 3, "distance": "correlation", "max_distance": null},
+    {"min_genome_bp": 3000000, "max_genome_bp_exclusive": 4000000, "bin_count": 4, "distance": "correlation", "max_distance": null},
+    {"min_genome_bp": 4000000, "max_genome_bp_exclusive": 5000000, "bin_count": 4, "distance": "correlation", "max_distance": null},
+    {"min_genome_bp": 5000000, "max_genome_bp_exclusive": 6000000, "bin_count": 4, "distance": "correlation", "max_distance": null},
+    {"min_genome_bp": 6000000, "max_genome_bp_exclusive": 7000000, "bin_count": 4, "distance": "correlation", "max_distance": null},
+    {"min_genome_bp": 7000000, "max_genome_bp_exclusive": null, "bin_count": 4, "distance": "correlation", "max_distance": null}
+  ],
+  "viral": [
+    {"min_genome_bp": 1000, "max_genome_bp_exclusive": 10000, "bin_count": 17, "distance": "cosine", "max_distance": null},
+    {"min_genome_bp": 10000, "max_genome_bp_exclusive": 100000, "bin_count": 100, "distance": "cosine", "max_distance": null},
+    {"min_genome_bp": 100000, "max_genome_bp_exclusive": null, "bin_count": 1006, "distance": "cosine", "max_distance": null}
+  ]
+}

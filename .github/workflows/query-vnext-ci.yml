@@ -1,0 +1,38 @@
+name: CoverageMap Query vNext regression
+on:
+  push:
+    branches:
+      - codex/query-vnext-sampling-statistics-20261112
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  query-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install CPU test dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install 'scipy>=1.10'
+          python -m pip install -r requirements-bin-count-evaluation.txt
+      - name: Verify Python syntax
+        run: python -m compileall -q bin tests
+      - name: Run query and Geometry regressions
+        run: |
+          python -m pytest -q \
+            tests/test_query_decision_methods.py \
+            tests/test_alignment_geometry.py \
+            tests/test_query_manifest_v2.py \
+            tests/test_jaccard_breadth.py \
+            tests/test_query_manifest.py \
+            tests/test_query_detection.py
+      - name: Run complete Python regression suite
+        run: python -m pytest -q tests/

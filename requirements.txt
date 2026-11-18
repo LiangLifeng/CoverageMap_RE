@@ -1,0 +1,15 @@
+# CoverageMap CPU runtime dependencies. Recommended Python: 3.12.
+# Check the active Python without installing or downloading anything:
+# python -m pip install --dry-run --no-index -r /home/lianglifeng/01.WorkDir/01.Project/03.CoverageMap/source/requirements.txt
+# All "Requirement already satisfied" means installed distribution versions meet this file.
+# Check dependency conflicts separately:
+# python -m pip check
+# Verify that the runtime modules actually import:
+# python -c "import sys,numpy,pysam,sqlite3; print(sys.executable); print(sys.version); print(numpy.__version__,pysam.__version__,sqlite3.sqlite_version)"
+# Install missing dependencies only when intended:
+# python -m pip install -r /home/lianglifeng/01.WorkDir/01.Project/03.CoverageMap/source/requirements.txt
+# sqlite3 is a Python standard-library module, not a pip requirement.
+# pytest is only for development tests (requirements-dev.txt); GPU dependencies are optional.
+# Use this same Python executable to launch the CLI and for its --python argument.
+numpy>=1.24
+pysam>=0.22
