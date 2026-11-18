@@ -121,3 +121,14 @@ mate_side, sampling_status, sampling_delta_bases, tolerance_accepted and
 geometry_cache_hit. Source errors are nonzero task failures; out-of-tolerance
 or undefined statistics remain explicit unscored results. Keep launch directory
 and work for -resume. The agent has not run formal NHB queries or Slurm jobs.
+
+
+## Failure-audit retention repair — 2026-11-19
+
+RAW_QUERY_SCORE passes --failure-audit-dir pointing to its persistent task work
+directory. On ERROR, score copies only summary.json/tsv, draws.tsv,
+decode_audit.json and statistics.json before returning nonzero. Dense arrays and
+raw alignments are not copied. Successful output/scoring/cache semantics remain
+unchanged. This prevents scratch cleanup from removing the reason for failed
+reference slots. Local focused97tests PASS; NHB native failure-path validation
+pending. This does not resolve or alter the pending mate-label sampling decision.

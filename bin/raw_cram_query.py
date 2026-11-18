@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import sys
 
 for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
@@ -473,6 +474,14 @@ def score(args):
     dump(output / "summary.json", summary)
     table(output / "summary.tsv", SUMMARY, [summary])
     if summary["status"] == "ERROR":
+        audit = getattr(args, 'failure_audit_dir', None)
+        if audit is not None:
+            audit = Path(audit)
+            audit.mkdir(parents=True, exist_ok=True)
+            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json'):
+                source = output / name
+                if source.is_file():
+                    shutil.copyfile(source, audit / name)
         print(summary.get("error", "Query failed"), file=sys.stderr)
         return 1
     return 0
@@ -559,6 +568,7 @@ def main():
     s.add_argument("--spec", type=Path, required=True)
     s.add_argument("--output", type=Path, required=True)
     s.add_argument("--stub", action="store_true")
+    s.add_argument("--failure-audit-dir", type=Path)
     c = sub.add_parser("collect")
     c.add_argument("--roster", type=Path, required=True)
     c.add_argument("--results-root", type=Path, required=True)

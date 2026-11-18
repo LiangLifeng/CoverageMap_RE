@@ -14,7 +14,7 @@ process RAW_QUERY_SCORE {
     """
     export PATH="\$PWD/query_code/bin:\$PATH"
     printf '%s' '${payload}' | base64 -d > spec.json
-    raw_cram_query.py score --spec spec.json --output "${meta.id}"
+    raw_cram_query.py score --spec spec.json --output "${meta.id}" --failure-audit-dir "${task.workDir}/failure_audit"
     cat <<-VERSIONS > versions.yml
     "${task.process}":
         raw_cram_query.py: \$(raw_cram_query.py --version)

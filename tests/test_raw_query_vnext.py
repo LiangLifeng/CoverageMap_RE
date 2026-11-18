@@ -309,3 +309,17 @@ def test_strict_subset_header_keeps_full_reference(tmp_path, unit):
     _bam(source, 'f' * 32)
     with pytest.raises(ValueError, match='M5 mismatch'):
         extract_once(source, layout, sampling_unit=unit, strict_reference=True)
+
+
+def test_failed_score_preserves_small_audit_only(tmp_path):
+    from bin.raw_cram_query import score
+    spec, _ = _fixture(tmp_path)
+    spec['reference_errors'] = {str(spec['references'][0]['id']): 'Synthetic reference unavailable'}
+    saved = tmp_path/'spec.json'
+    saved.write_text(json.dumps(spec))
+    output, audit = tmp_path/'failed', tmp_path/'work'/'failure_audit'
+    assert score(SimpleNamespace(spec=saved, output=output, stub=False, failure_audit_dir=audit)) == 1
+    for name in ['summary.json', 'draws.tsv', 'decode_audit.json', 'statistics.json']:
+        assert (audit/name).read_bytes() == (output/name).read_bytes()
+    assert not list(audit.glob('*.npy'))
+    assert json.loads((audit/'summary.json').read_text())['status'] == 'ERROR'
