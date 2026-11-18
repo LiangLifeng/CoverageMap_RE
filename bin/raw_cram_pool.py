@@ -32,9 +32,9 @@ def extract_once(path, reference, *, sampling_unit="read", min_mapq=0,
                 raise ValueError("Alignment header length differs from full FAI")
         observed_md5 = {r["SN"]: r.get("M5", "") for r in sq}
         if strict_reference:
-            if set(names) != set(reference.names):
-                raise ValueError("Strict FASTA reference requires complete CRAM @SQ dictionary")
             for name, expected in zip(reference.names, reference.md5):
+                if name not in observed_md5:
+                    continue
                 actual = observed_md5.get(name, "").lower()
                 if not expected or actual != expected.lower():
                     raise ValueError(f"FASTA/CRAM M5 mismatch or missing: {name}")

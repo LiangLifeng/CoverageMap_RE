@@ -8,7 +8,9 @@ This is a local engineering handoff. Native Nextflow/NHB/data acceptance is pend
 ## Integrated behavior
 
 The FNA/FAI SQL catalog selects strict FASTA-backed validation. FASTA and FAI
-contig names/lengths must agree and alignment @SQ must match FASTA SN/LN/M5.
+contig names/lengths must agree. Alignment @SQ may be a subset of FASTA; present
+contigs must match FASTA SN/LN/M5, omitted contigs contribute zero coverage
+with the full FASTA/FAI denominator and are recorded in the missing-contig audit.
 The older CRAM-only SQL plus explicit FAI retains its historical sampler; it does
 not silently enable the new algorithm. Use the catalog SQL for vNext.
 

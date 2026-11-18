@@ -289,3 +289,23 @@ def test_vnext_diagnostics_preserves_mate_coverage(tmp_path):
         methods=spec['config']['jaccard_methods'], jobs=1, query_id=None, outdir=out,
         null_root=root.parent, work_dir=None, staged_nulls=None, trace=None, stub=False)) == 0
     assert len(list(out.rglob('*.png'))) == 4
+
+
+@pytest.mark.parametrize('unit', ['read', 'fragment'])
+def test_strict_subset_header_keeps_full_reference(tmp_path, unit):
+    from bin.raw_cram_pool import extract_once
+    from bin.coverage_core import Reference, dense_coverage
+    digest = hashlib.md5(b'A' * 400).hexdigest()
+    source = tmp_path / 'subset.bam'
+    _bam(source, digest)
+    layout = Reference(('chr1', 'chr2'), (400, 100),
+                       (digest, hashlib.md5(b'C' * 100).hexdigest()))
+    pool, observed, missing = extract_once(source, layout, sampling_unit=unit, strict_reference=True)
+    assert missing == ['chr2']
+    assert observed.names == layout.names and observed.length == 500
+    dense = dense_coverage(pool, np.arange(len(pool)))
+    assert dense[:400].sum() == 200
+    assert not dense[400:].any()
+    _bam(source, 'f' * 32)
+    with pytest.raises(ValueError, match='M5 mismatch'):
+        extract_once(source, layout, sampling_unit=unit, strict_reference=True)
