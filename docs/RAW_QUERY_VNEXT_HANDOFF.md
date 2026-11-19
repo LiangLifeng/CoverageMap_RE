@@ -1,3 +1,7 @@
+> Current v1.3.2: optional `--m5_policy geometry_only` accepts header M5
+> mismatches only when contig SN/LN and the authoritative FASTA layout agree;
+> source-level M5 audit is written for every decoded Query and Reference.
+>
 > Current v1.3.1: Reference source Depth QC is enforced at query planning with
 > Nextflow --min_reference_depth (default 5x). It is separate from --depth_threshold.
 >
@@ -212,3 +216,50 @@ slot arrays. No threshold, tolerance, clinical label or manifest row is altered.
   `draws.tsv` joined to SQLite `reference_records` by reference_id,
   count sub-5x selected slots separately by low/high arms and check the
   changed eligible-support/unscored rates before approval.
+
+## v1.3.2 Configurable CRAM/BAM header M5 policy (2026-11-19)
+
+Use Nextflow `--m5_policy strict|geometry_only`, passed to Python as
+`raw_cram_query.py plan --m5-policy`. The default is **strict**.
+
+- `strict`: each observed contig's alignment-header `@SQ M5` must match
+  the digest computed from the exact SQL-cataloged FNA sequence. A missing
+  M5 is rejected; missing entire contigs remain allowed as before.
+- `geometry_only`: keep the authoritative FNA/FAI contig ID, length,
+  ordering, offsets and computed M5 for all coverage geometry. Allow a
+  differing or missing alignment-header M5 **without replacing the FNA
+  checksum or modifying the alignment**, and record the discrepancy.
+- A SQL FNA/FAI catalog is mandatory for `geometry_only`. Legacy CRAM-only
+  indexes without a full FASTA are rejected for this mode.
+- SN duplicates/unknown contigs and LN disagreements are rejected under
+  **both** policies. A contig absent from alignment @SQ contributes zero
+  coverage under the full FNA denominator. `skip` is intentionally unsupported.
+- If the underlying CRAM requires a source reference for decoding and
+  HTSlib cannot decode it, `geometry_only` still fails; no reference
+  reconstruction, sequence bypass, or M5 rewriting is attempted.
+
+Each scored Query writes `m5_audit.json`. It includes Query and each
+decoded Reference source identifier, path, policy, cache hit, per-source
+mismatch/missing-M5 counts, and per-contig `contig_id`, `length`,
+`fna_m5`, `cram_m5`, `status` (`MATCH`, `MISMATCH`,
+`MISSING_M5`, `MISSING_CONTIG`). The source status is `PASS`,
+`MISMATCH_ALLOWED`, `NOT_VALIDATED` (legacy FAI-only), or `ERROR`.
+Strict failures include per-contig M5 evidence in the persisted failure
+audit. The cache serializes the audit and includes `m5_policy` in its
+key, so policy changes cannot silently reuse a differently validated
+geometry cache. The numeric scoring contract and reference replacement
+rules are not changed.
+
+**Interpretation limitation:** SN/LN identity does not prove that two
+different FASTA sequences are coordinate-equivalent. Use
+`geometry_only` only when provenance establishes that the CRAM
+coordinates are comparable; follow up with the upstream generation team
+for any unexpected digest disagreement. Do not interpret a permitted M5
+mismatch as evidence that the underlying sequences are identical.
+
+**Codex NHB validation:** test Query and Reference mismatches separately,
+strict error audit and failure persistence, missing M5, missing/unknown
+contigs, SN/LN mismatch rejection, `replace` path, Read/Fragment,
+cold/warm geometry cache and policy-specific cache keys; then test
+reproducibility and output comparisons in native Nextflow with both
+`--m5_policy` modes.
