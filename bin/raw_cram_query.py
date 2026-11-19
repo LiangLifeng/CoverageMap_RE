@@ -211,6 +211,8 @@ def plan(args):
             raise ValueError("Require coverage-raw-cram-index-1 SQLite")
         has_catalog = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_genomes'").fetchone() is not None
+        if m5_policy == "geometry_only" and not has_catalog:
+            raise ValueError("geometry_only requires SQLite FNA/FAI catalog")
         for number, query in enumerate(queries, 1):
             qid = f"q{number:08d}"
             spec = dict(schema="raw-cram-query-1", query_id=qid, query=query, config=config,
@@ -252,8 +254,6 @@ def plan(args):
                               else "INSUFFICIENT_REFERENCE_SAMPLES")
                     raise UnscoredQuery(status, "Requires eligible distinct reference samples > min-samples")
                 fna = None
-                if m5_policy == "geometry_only" and not has_catalog:
-                    raise ValueError("geometry_only requires SQLite FNA/FAI catalog")
                 if has_catalog:
                     genome = connection.execute(
                         "SELECT FnaFilePath,FaiFilePath FROM reference_genomes WHERE GCFID=?",
