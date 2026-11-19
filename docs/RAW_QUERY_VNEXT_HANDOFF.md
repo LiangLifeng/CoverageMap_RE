@@ -238,7 +238,9 @@ Use Nextflow `--m5_policy strict|geometry_only`, passed to Python as
   HTSlib cannot decode it, `geometry_only` still fails; no reference
   reconstruction, sequence bypass, or M5 rewriting is attempted.
 
-Each scored Query writes `m5_audit.json`. It includes Query and each
+Each decoded source is appended once to `m5_audit.jsonl`, with a final deduplicated
+`m5_audit.json` written at completion or failure; this avoids repeatedly rewriting
+a growing audit on hundreds of Reference CRAMs. The final JSON includes Query and each
 decoded Reference source identifier, path, policy, cache hit, per-source
 mismatch/missing-M5 counts, and per-contig `contig_id`, `length`,
 `fna_m5`, `cram_m5`, `status` (`MATCH`, `MISMATCH`,
