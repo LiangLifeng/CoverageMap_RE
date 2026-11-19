@@ -23,7 +23,7 @@ process RAW_QUERY_PLAN {
     export PATH="\$PWD/query_code/bin:\$PATH"
     raw_cram_query.py plan --manifest "${manifest}" --index "${index}" --output plan \
         ${fai} ${windows} --alpha ${params.alpha} --reference-draws ${params.reference_draws} \
-        --seed ${params.seed} --depth-threshold ${params.depth_threshold} --min-reference-depth ${params.min_reference_depth} \
+        --seed ${params.seed} --depth-threshold ${params.depth_threshold} --min-reference-depth ${params.min_reference_depth} --m5-policy ${params.m5_policy} \
         --sampling-tolerance-bp ${params.sampling_tolerance_bp} \
         --insufficient-reference-policy ${params.insufficient_reference_policy} \
         --geometry-cache-dir "${geometryCache}" \
@@ -48,7 +48,7 @@ process RAW_QUERY_PLAN {
     export PATH="\$PWD/query_code/bin:\$PATH"
     raw_cram_query.py plan --manifest "${manifest}" --index "${index}" --output plan \
         ${fai} ${windows} --alpha ${params.alpha} --reference-draws ${params.reference_draws} \
-        --seed ${params.seed} --depth-threshold ${params.depth_threshold} --min-reference-depth ${params.min_reference_depth} \
+        --seed ${params.seed} --depth-threshold ${params.depth_threshold} --min-reference-depth ${params.min_reference_depth} --m5-policy ${params.m5_policy} \
         --sampling-tolerance-bp ${params.sampling_tolerance_bp} \
         --insufficient-reference-policy ${params.insufficient_reference_policy} \
         --geometry-cache-dir "${geometryCache}" \
