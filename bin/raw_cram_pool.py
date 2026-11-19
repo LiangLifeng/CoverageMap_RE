@@ -6,13 +6,42 @@ import numpy as np
 from bin.coverage_core import BlockPool, Reference, merge_references
 
 
+class M5ValidationError(ValueError):
+    """Header M5 mismatch with inspectable per-contig evidence."""
+
+    def __init__(self, message, m5_audit):
+        super().__init__(message)
+        self.m5_audit = m5_audit
+
+
+def m5_header_audit(reference, header_sq):
+    """Compare the full FASTA contig checksums with observed alignment @SQ M5."""
+    observed = {record["SN"]: record for record in header_sq}
+    result = []
+    for name, length, expected in zip(reference.names, reference.lengths, reference.md5):
+        row = observed.get(name)
+        actual = str(row.get("M5") or "").lower() if row else ""
+        expected = expected.lower()
+        status = ("MISSING_CONTIG" if row is None else
+                  "MISSING_M5" if not actual else
+                  "MATCH" if actual == expected else "MISMATCH")
+        result.append(dict(contig_id=name, length=length, fna_m5=expected,
+                           cram_m5=actual, status=status))
+    return result
+
+
 def extract_once(path, reference, *, sampling_unit="read", min_mapq=0,
-                 coverage_alignment_policy="primary_only", strict_reference=False):
+                 coverage_alignment_policy="primary_only", strict_reference=False,
+                 m5_policy="strict"):
     """Keep actual mate blocks together; never use the span between mates."""
     import pysam
     if (sampling_unit not in ("read", "fragment") or min_mapq < 0
             or coverage_alignment_policy not in ("primary_only", "primary_plus_supplementary")):
         raise ValueError("Invalid sampling policy")
+    if m5_policy not in ("strict", "geometry_only"):
+        raise ValueError("m5_policy must be strict or geometry_only")
+    if m5_policy == "geometry_only" and (not strict_reference or not all(reference.md5)):
+        raise ValueError("geometry_only requires authoritative SQL FASTA with M5 digests")
     with Path(path).open("rb") as handle:
         cram = handle.read(4) == b"CRAM"
     options = dict(format_options=[b"required_fields=4159", b"decode_md=0"]) if cram else {}
@@ -31,17 +60,22 @@ def extract_once(path, reference, *, sampling_unit="read", min_mapq=0,
             if row["LN"] != sizes[row["SN"]]:
                 raise ValueError("Alignment header length differs from full FAI")
         observed_md5 = {r["SN"]: r.get("M5", "") for r in sq}
-        if strict_reference:
-            for name, expected in zip(reference.names, reference.md5):
-                if name not in observed_md5:
-                    continue
-                actual = observed_md5.get(name, "").lower()
-                if not expected or actual != expected.lower():
-                    raise ValueError(f"FASTA/CRAM M5 mismatch or missing: {name}")
+        m5_audit = m5_header_audit(reference, sq) if strict_reference else []
+        if strict_reference and m5_policy == "strict":
+            invalid = next((r for r in m5_audit
+                            if r["status"] in ("MISMATCH", "MISSING_M5")), None)
+            if invalid is not None:
+                raise M5ValidationError(
+                    f'FASTA/CRAM M5 mismatch or missing: {invalid["contig_id"]}', m5_audit)
         observed = Reference(reference.names, reference.lengths,
                              tuple(observed_md5.get(n, "") for n in reference.names),
                              tuple(n for n in reference.names if n not in names), reference.sort_policy)
-        merged = merge_references(reference, observed)
+        # Geometry-only comparison preserves authoritative FASTA M5 in layout.
+        # Observed header M5 is evidence for the audit, not a trusted layout.
+        merged = (Reference(reference.names, reference.lengths, reference.md5,
+                            observed.missing_header_contigs, reference.sort_policy)
+                  if strict_reference and m5_policy == "geometry_only"
+                  else merge_references(reference, observed))
         for order, read in enumerate(bam.fetch(until_eof=True)):
             role = (1 if read.is_read1 and not read.is_read2 else
                     2 if read.is_read2 and not read.is_read1 else 0 if not read.is_paired else 3)
@@ -118,5 +152,6 @@ def extract_once(path, reference, *, sampling_unit="read", min_mapq=0,
         _, first = np.unique(np.asarray(segment_reads, dtype=np.int64), return_index=True)
         _, pool.unit_read_counts = np.unique(ids[first], return_counts=True)
     pool.sampling_unit = sampling_unit
+    pool.m5_audit = m5_audit
     return pool, merged, list(observed.missing_header_contigs)
 
