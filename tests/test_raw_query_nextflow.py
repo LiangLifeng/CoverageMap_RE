@@ -36,7 +36,8 @@ def test_raw_native_methods_diagnostics_resume(tmp_path):
             '--bootstrap_replicates', '100', '--jaccard_coverage_thresholds', 'default',
             '--diagnostics', 'true']
     env = dict(os.environ, NXF_SYNTAX_PARSER='v2', PYTHONDONTWRITEBYTECODE='1')
-    for number, extra in enumerate([[], ['-resume'], ['--sampling_unit', 'fragment']], 1):
+    for number, extra in enumerate([[], ['-resume'], ['--sampling_unit', 'fragment'],
+        ['--sampling_unit','read','--insufficient_reference_policy','replace']], 1):
         trace = tmp_path / f'trace-{number}.tsv'
         command = base + ['-with-trace', str(trace)] + extra
         result = subprocess.run(command, cwd=tmp_path, env=env, text=True,
@@ -89,3 +90,37 @@ env.PATH='{Path(sys.executable).parent}:'+System.getenv('PATH')
     assert len(audits)==1, result.stdout+result.stderr
     assert json.loads(audits[0].read_text())['error']==spec['error']
     assert not list(scratch.rglob('summary.json'))
+
+
+def test_native_index_uses_tracked_mate_audit(tmp_path):
+    import sqlite3
+    import pysam
+    from bin.build_cram_index import build_index
+    from bin.audit_cram_mate_labels import audit
+    spec, _ = _fixture(tmp_path)
+    unlabelled = tmp_path/'unlabelled.bam'
+    with pysam.AlignmentFile(spec['query']['CramPath'],'rb') as source:
+        with pysam.AlignmentFile(str(unlabelled),'wb',header=source.header) as output:
+            for i,read in enumerate(source):
+                read.flag=0;read.query_name=f'unknown{i}';output.write(read)
+    with (tmp_path/'build.csv').open('a',newline='') as handle:
+        csv.writer(handle).writerow(['unknown',str(unlabelled),'GCF_1.1','50','6'])
+    raw=tmp_path/'raw.sqlite'
+    build_index(tmp_path/'build.csv',raw,tmp_path/'fna.csv',tmp_path/'fai.csv')
+    inventory=tmp_path/'mate.tsv'
+    assert audit(raw,inventory,1,2,1,0)['errors']==0
+    config=tmp_path/'index.config'
+    config.write_text("conda.enabled=false\n"+f"env.PATH='{Path(sys.executable).parent}:'+System.getenv('PATH')\n")
+    command=[NEXTFLOW,'-C',f'{ROOT}/nextflow.config,{config}','run',str(ROOT/'build_cram_index.nf'),
+             '-profile','local','-work-dir',str(tmp_path/'index_work'),
+             '--records',str(tmp_path/'build.csv'),'--fna',str(tmp_path/'fna.csv'),
+             '--fai',str(tmp_path/'fai.csv'),'--mate_audit',str(inventory),
+             '--outdir',str(tmp_path/'index_result')]
+    result=subprocess.run(command,cwd=tmp_path,text=True,capture_output=True,timeout=120,
+                          env=dict(os.environ,NXF_SYNTAX_PARSER='v2'))
+    (tmp_path/'index-console.log').write_text(result.stdout+result.stderr)
+    assert result.returncode==0,result.stdout+result.stderr
+    with sqlite3.connect(tmp_path/'index_result/cram_index/reference_cram.sqlite') as db:
+        assert db.execute('SELECT id FROM reference_records').fetchall()==[(1,)]
+        assert db.execute('SELECT id,included FROM reference_mate_audit ORDER BY id').fetchall()==[(1,1),(2,0)]
+        assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'

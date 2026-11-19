@@ -1,4 +1,5 @@
 import csv
+import sqlite3
 from pathlib import Path
 
 import pysam
@@ -52,3 +53,40 @@ def test_range_determinism_missing_and_overwrite(tmp_path):
     assert audit(index,second,1,2,2,0)['errors']==1
     assert first.read_bytes()==second.read_bytes()
     with pytest.raises(FileExistsError): audit(index,first,1,2,1,0)
+
+
+def test_filtered_index_preserves_original_ids_and_all_audit_rows(tmp_path):
+    source = tmp_path/'records.csv'
+    paths = [tmp_path/f'{i}.bam' for i in range(3)]
+    for path,flags in zip(paths, [[0],[65,129],[65]]):write_bam(path,flags)
+    with source.open('w',newline='') as h:
+        writer=csv.writer(h);writer.writerow(['Sample','CramFilePath','GCFID','Coverage','Depth'])
+        writer.writerows([[f's{i}',str(p),'g','1','1'] for i,p in enumerate(paths)])
+    original=tmp_path/'original.sqlite';build_index(source,original)
+    inventory=tmp_path/'audit.tsv';audit(original,inventory,1,3,2,0)
+    filtered=tmp_path/'filtered.sqlite'
+    metadata=build_index(source,filtered,mate_audit=inventory)
+    assert metadata['records']==2 and metadata['source_records']==3
+    assert metadata['excluded_mate_records']==1
+    with sqlite3.connect(filtered) as db:
+        assert db.execute('SELECT id FROM reference_records ORDER BY id').fetchall()==[(2,),(3,)]
+        assert db.execute('SELECT id,included FROM reference_mate_audit ORDER BY id').fetchall()==[(1,0),(2,1),(3,1)]
+    changed=inventory.read_text().replace('s0','different')
+    inventory.write_text(changed)
+    invalid=tmp_path/'bad.sqlite'
+    with pytest.raises(ValueError,match='identity differs'):
+        build_index(source,invalid,mate_audit=inventory)
+    assert not invalid.exists()
+
+
+def test_incomplete_or_error_audit_cannot_silently_filter(tmp_path):
+    source=tmp_path/'records.csv'
+    with source.open('w',newline='') as h:
+        writer=csv.writer(h);writer.writerow(['Sample','CramFilePath','GCFID','Coverage','Depth'])
+        writer.writerow(['s',str(tmp_path/'missing.bam'),'g','1','1'])
+    original=tmp_path/'original.sqlite';build_index(source,original)
+    inventory=tmp_path/'audit.tsv';audit(original,inventory,1,1,1,0)
+    output=tmp_path/'filtered.sqlite'
+    with pytest.raises(ValueError,match='input errors'):
+        build_index(source,output,mate_audit=inventory)
+    assert not output.exists()

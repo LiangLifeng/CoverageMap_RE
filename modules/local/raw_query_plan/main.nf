@@ -24,7 +24,9 @@ process RAW_QUERY_PLAN {
     raw_cram_query.py plan --manifest "${manifest}" --index "${index}" --output plan \
         ${fai} ${windows} --alpha ${params.alpha} --reference-draws ${params.reference_draws} \
         --seed ${params.seed} --depth-threshold ${params.depth_threshold} \
-        --sampling-tolerance-bp ${params.sampling_tolerance_bp} --geometry-cache-dir "${geometryCache}" \
+        --sampling-tolerance-bp ${params.sampling_tolerance_bp} \
+        --insufficient-reference-policy ${params.insufficient_reference_policy} \
+        --geometry-cache-dir "${geometryCache}" \
         --sampling-unit ${params.sampling_unit} --min-mapq ${params.min_mapq} \
         --min-samples ${params.min_samples} --threads ${params.query_cpus} \
         --jaccard-coverage-threshold ${params.jaccard_coverage_threshold} ${grid} ${coverage} \
@@ -47,7 +49,9 @@ process RAW_QUERY_PLAN {
     raw_cram_query.py plan --manifest "${manifest}" --index "${index}" --output plan \
         ${fai} ${windows} --alpha ${params.alpha} --reference-draws ${params.reference_draws} \
         --seed ${params.seed} --depth-threshold ${params.depth_threshold} \
-        --sampling-tolerance-bp ${params.sampling_tolerance_bp} --geometry-cache-dir "${geometryCache}" \
+        --sampling-tolerance-bp ${params.sampling_tolerance_bp} \
+        --insufficient-reference-policy ${params.insufficient_reference_policy} \
+        --geometry-cache-dir "${geometryCache}" \
         --sampling-unit ${params.sampling_unit} --min-mapq ${params.min_mapq} \
         --min-samples ${params.min_samples} --threads ${params.query_cpus} \
         --jaccard-coverage-threshold ${params.jaccard_coverage_threshold} ${grid} ${coverage} \

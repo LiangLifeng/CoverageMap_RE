@@ -20,6 +20,7 @@ import numpy as np
 from bin.coverage_core import canonical_reference, read_reference_index, read_reference, window_sums, covered_sums, select_units
 from bin.raw_query_sampling import query_arms, compatible_reference_ids, select_nearest_units
 from bin.raw_geometry_cache import cached_extract
+from bin.raw_reference_replacement import resolve_reference_choices, InsufficientReferenceCapacity
 from bin.gcf_windows import GCF_CONCAT, edges_for, coordinate_rows, COORDINATE_COLUMNS
 from bin.query_manifest_stats import similarity, aggregate, reference_row_means
 from bin.raw_cram_pool import extract_once
@@ -28,21 +29,23 @@ from bin.query_decision_methods import parse_methods, validate_options, COLUMNS 
 from bin.query_manifest import DISTRIBUTION_COLUMNS
 from bin.raw_query_outputs import legacy_outputs, unscored_outputs, read_rows
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 SUMMARY = ("query_id", "Sample", "GCFID", "status", "error", "arm", "manifest_depth",
            "actual_query_depth", "available_count", "eligible_count", "requested_draws",
            "valid_draws", "unique_references", "duplicate_draws", "decoded_reference_files",
            "alpha", "jaccard", "jaccard_p", "jaccard_status", "jaccard_decision",
            "pearson", "pearson_p", "pearson_status", "pearson_decision", "detection_status",
            "sampling_tolerance_bp", "tolerated_undershoot_draws", "tolerated_overshoot_draws",
-           "out_of_tolerance_draws", "geometry_cache_hits", "query_read1_bases", "query_read2_bases")
+           "out_of_tolerance_draws", "geometry_cache_hits", "query_read1_bases", "query_read2_bases",
+           "insufficient_reference_policy", "replaced_draws", "replacement_attempts")
 SUMMARY = tuple(dict.fromkeys((*SUMMARY, *DISTRIBUTION_COLUMNS, "query_exit_code", "result_source")))
 DRAWS = ("draw_id", "reference_id", "reference_sample", "reference_path", "status", "error",
          "rng_sha256", "selected_ids_sha256", "selected_units", "selected_reads",
          "actual_bases", "target_bases", "actual_depth", "jaccard", "pearson",
          "intersection", "union", "jaccard_status", "pearson_status",
          "mate_side", "sampling_status", "sampling_delta_bases", "available_bases",
-         "tolerance_bp", "tolerance_accepted", "geometry_cache_hit")
+         "tolerance_bp", "tolerance_accepted", "geometry_cache_hit",
+         "original_reference_id", "replacement_attempts")
 
 
 class UnscoredQuery(ValueError):
@@ -138,6 +141,7 @@ def plan(args):
     mapping = fai_mapping(args.fai_map)
     config = dict(reference_draws=args.reference_draws, alpha=args.alpha, seed=args.seed,
                   sampling_tolerance_bp=getattr(args, "sampling_tolerance_bp", 150),
+                  insufficient_reference_policy=getattr(args, "insufficient_reference_policy", "unscored"),
                   geometry_cache_dir=str(Path(args.geometry_cache_dir).expanduser().resolve()) if getattr(args, "geometry_cache_dir", None) else None,
                   depth_threshold=args.depth_threshold, bin_count=args.bin_count,
                   window_size=args.window_size, sampling_unit=args.sampling_unit,
@@ -216,7 +220,8 @@ def plan(args):
                 spec["fai"] = str(Path(fai).absolute())
                 generator, token = rng(args.seed, query["GCFID"], query["Sample"], qid, "reference-samples")
                 choices = generator.integers(0, len(refs), size=args.reference_draws)
-                spec["references"] = [refs[i] for i in sorted(set(int(i) for i in choices))]
+                spec["references"] = (refs if low and config["insufficient_reference_policy"] == "replace"
+                                      else [refs[i] for i in sorted(set(int(i) for i in choices))])
                 spec["choices"] = [refs[int(i)]["id"] for i in choices]
                 spec["source_rng_sha256"] = token
                 for genome_file in (spec["fna"], spec["fai"]):
@@ -314,8 +319,52 @@ def calculate(spec, output, *, extractor=extract_once):
                  if sampling_arms else [None] * count)
     if len(draw_arms) != count:
         raise AssertionError("Mate arm draw partition differs from reference_draws")
+    choices = list(spec["choices"])
+    replacements = []
+    preflight = {}
+    source_policy = config.get('insufficient_reference_policy', 'unscored')
+    summary.update(insufficient_reference_policy=source_policy, replaced_draws=0, replacement_attempts=0)
+    if source_policy == 'replace' and spec['arm'] == 'low':
+        if not strict or not cache_dir:
+            raise ValueError('Replacement requires SQL FASTA catalog and shared geometry cache')
+        def capacity(ref, arm):
+            refid = ref['id']
+            if refid not in preflight:
+                if str(refid) in spec['reference_errors']:
+                    raise ValueError(spec['reference_errors'][str(refid)])
+                if os.path.samefile(query['CramPath'], ref['CramFilePath']):
+                    raise ValueError('Reference aliases query source')
+                candidate, _, _, hit = cached_extract(
+                    ref['CramFilePath'], layout, extractor, cache_dir=cache_dir, **policies)
+                summary['decoded_reference_files'] += int(not hit)
+                summary['geometry_cache_hits'] += int(hit)
+                info = dict(reference_id=refid, cache_hit=hit, capacities={})
+                for candidate_arm in sampling_arms:
+                    eligible = compatible_reference_ids(candidate, candidate_arm.mate_side)
+                    info['capacities'][candidate_arm.name] = (
+                        int(candidate.unit_bases[eligible].sum()), len(eligible))
+                preflight[refid] = info
+                del candidate
+            return preflight[refid]['capacities'][arm.name]
+        try:
+            choices, replacements = resolve_reference_choices(spec, sampling_arms, capacity, rng)
+        except InsufficientReferenceCapacity as error:
+            replacements = error.events
+            dump(output/'replacement_audit.json', replacements)
+            table(output/'replacement_audit.tsv', tuple(replacements[0]) if replacements else ('draw_id','reason'), replacements)
+            dump(output/'replacement_capacity_audit.json', list(preflight.values()))
+            summary.update(status='INSUFFICIENT_REFERENCE_CAPACITY', error=str(error))
+            return summary
+        summary.update(replaced_draws=sum(a != b for a,b in zip(spec['choices'], choices)),
+                       replacement_attempts=len(replacements))
+    dump(output/'replacement_audit.json', replacements)
+    table(output/'replacement_audit.tsv', tuple(replacements[0]) if replacements else ('draw_id','reason'), replacements)
+    dump(output/'replacement_capacity_audit.json', list(preflight.values()))
+    replacement_counts = defaultdict(int)
+    for event in replacements:
+        replacement_counts[event['draw_id']] += 1
     groups, draws = defaultdict(list), []
-    for number, refid in enumerate(spec["choices"]):
+    for number, refid in enumerate(choices):
         ref = references[refid]
         _, token = rng(config["seed"], qid, query["Sample"], query["GCFID"], "read-units", number)
         draws.append(dict(draw_id=number, reference_id=refid, reference_sample=ref["Sample"],
@@ -323,6 +372,8 @@ def calculate(spec, output, *, extractor=extract_once):
                           sampling_unit=config["sampling_unit"],
                           coverage_alignment_policy=config.get("coverage_alignment_policy", "primary_only"),
                           reference_path=ref["CramFilePath"], rng_sha256=token,
+                          original_reference_id=spec["choices"][number],
+                          replacement_attempts=replacement_counts[number],
                           mate_side=draw_arms[number].mate_side if draw_arms[number] else "both",
                           status="ERROR", error="",
                           target_bases=draw_arms[number].target_bases if draw_arms[number] else target,
@@ -478,7 +529,7 @@ def score(args):
         if audit is not None:
             audit = Path(audit)
             audit.mkdir(parents=True, exist_ok=True)
-            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json'):
+            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json', 'replacement_audit.json', 'replacement_audit.tsv', 'replacement_capacity_audit.json'):
                 source = output / name
                 if source.is_file():
                     shutil.copyfile(source, audit / name)
@@ -548,6 +599,7 @@ def main():
     p.add_argument("--reference-draws", type=int, default=100)
     p.add_argument("--sampling-tolerance-bp", type=int, default=150)
     p.add_argument("--geometry-cache-dir", type=Path)
+    p.add_argument("--insufficient-reference-policy", choices=("unscored", "replace"), default="unscored")
     p.add_argument("--alpha", type=float, required=True)
     p.add_argument("--seed", type=int, default=401)
     p.add_argument("--depth-threshold", type=float, default=5)

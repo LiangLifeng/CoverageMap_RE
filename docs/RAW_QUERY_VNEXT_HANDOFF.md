@@ -1,3 +1,7 @@
+> Current v1.3.0: rebuild with --mate-audit to exclude unidentifiable reference mates.
+> Nextflow --insufficient_reference_policy unscored|replace selects capacity behavior; this run uses replace.
+> Details below supersede the historical no-redraw source policy for replace mode only.
+
 # CoverageMap_RE Raw Query vNext 1.2.1
 
 Development baseline: `db11a9f21700178b8571566970480a1f8d7dc3e4`.
@@ -132,3 +136,40 @@ raw alignments are not copied. Successful output/scoring/cache semantics remain
 unchanged. This prevents scratch cleanup from removing the reason for failed
 reference slots. Local focused97tests PASS; NHB native failure-path validation
 pending. This does not resolve or alter the pending mate-label sampling decision.
+
+
+## v1.3.0 labelled catalog and source replacement
+
+The complete347993-row primary-mate inventory preserves rowID,Sample,GCF,path,
+observed labels, scan completeness, observed primary count and errors. Presence
+of both labels can stop scanning early; negative claims require a complete scan.
+Counts from that inventory are observed lower bounds, not full distributions.
+Original CSV/FNA/FAI and CRAMs remain unchanged.
+
+`build_cram_index.py --mate-audit mate_audit.tsv` (Nextflow --mate_audit)
+requires complete original-row coverage and exact Sample/GCF/path matches.
+References with no identifiable mate labels or observed invalid mate flags are
+excluded from reference_records; identifiable one-sided sources remain labelled,
+with unsupported-arm capacity0 handled by source replacement. Original input
+rowIDs remain stable despite exclusions. reference_mate_audit retains provenance
+and included flags separately. A read error is not proof of missing mate labels
+and prevents final filtering until resolved. Standalone excluded_references.tsv
+retains all original CSV fields plus FNA/FAI paths and full audit evidence.
+
+`--insufficient_reference_policy unscored` retains the existing source draws and
+reports out-of-tolerance results. `replace` makes all SQL-eligible sources tracked
+inputs, validates actual eligible bases separately for each Query arm, and replaces
+only sources that cannot meet target within the unchanged tolerance. Complete
+units are never truncated or upsampled. Each replacement uses independently keyed
+source RNGs; read-unit draw RNGs and the1000-slot denominator remain unchanged.
+Sources invalid for one arm remain usable for the other. Actual distinct-sample
+support must still exceed min_samples. Decode/identity/M5 errors are not silently
+converted into low capacity. Exhausted support is explicit NOT_EVALUATED.
+
+replacement_audit.json/tsv retain each rejection, replacement source ID, reason,
+target, actual available mass, tolerance and RNG token. Draw tables retain the
+original reference ID and replacement attempt count. Geometry capacity checks
+reuse the policy-keyed shared cache, so some archives are loaded for preflight
+and again for scoring while raw decoding is cached. No speed claim is made.
+All scientific statistics and optional methods/grid consume only the final frozen
+slot arrays. No threshold, tolerance, clinical label or manifest row is altered.

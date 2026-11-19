@@ -9,7 +9,8 @@ from bin.query_manifest import DRAW_COLUMNS, NULL_COLUMNS, DISTRIBUTION_COLUMNS,
 
 
 RAW_DRAW_COLUMNS = (*DRAW_COLUMNS, "mate_side", "sampling_status", "sampling_delta_bases",
-                    "available_bases", "tolerance_bp", "tolerance_accepted", "geometry_cache_hit")
+                    "available_bases", "tolerance_bp", "tolerance_accepted", "geometry_cache_hit",
+                    "original_reference_id", "replacement_attempts")
 
 
 def legacy_outputs(output, summary, draws, query, test, matrix, breadth, covered,

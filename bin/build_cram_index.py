@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 import sqlite3
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 REQUIRED = {"Sample", "CramFilePath", "GCFID", "Coverage", "Depth"}
 
 
@@ -73,7 +73,53 @@ def add_catalog(connection, fna, fai):
                 matching_basis="exact full GCF_ID/GCFID including version; path basename checked")
 
 
-def build_index(records, output, fna=None, fai=None):
+def import_mate_audit(connection, path):
+    """Store provenance separately; unidentifiable sources are not references."""
+    connection.execute('''CREATE TABLE reference_mate_audit (
+        id INTEGER PRIMARY KEY, Sample TEXT NOT NULL, GCFID TEXT NOT NULL,
+        CramFilePath TEXT NOT NULL, status TEXT NOT NULL, included INTEGER NOT NULL,
+        read1_seen INTEGER NOT NULL, read2_seen INTEGER NOT NULL,
+        unlabelled_seen INTEGER NOT NULL, invalid_flags_seen INTEGER NOT NULL,
+        scan_complete INTEGER NOT NULL)''')
+    count = 0
+    boolean = {'True': 1, 'False': 0}
+    with Path(path).open(newline='') as handle:
+        reader = csv.DictReader(handle, delimiter='\t')
+        required = {'id','Sample','GCFID','CramFilePath','status','read1_seen','read2_seen',
+                    'unlabelled_seen','invalid_flags_seen','scan_complete','error'}
+        if not required <= set(reader.fieldnames or []):
+            raise ValueError('Incomplete mate-audit columns')
+        batch = []
+        for row in reader:
+            if row['status'] == 'ERROR' or row['error']:
+                raise ValueError('Mate audit has input errors; resolve them before filtering')
+            try:
+                flags = [boolean[row[k]] for k in ('read1_seen','read2_seen','unlabelled_seen',
+                                                   'invalid_flags_seen','scan_complete')]
+            except KeyError as error:
+                raise ValueError('Invalid boolean in mate audit') from error
+            status = row['status']
+            if status not in ('BOTH_LABELS_PRESENT','ONLY_READ1','ONLY_READ2',
+                              'NO_MATE_LABELS','INVALID_MATE_FLAGS','NO_ELIGIBLE_PRIMARY'):
+                raise ValueError('Unknown mate-audit status')
+            included = int(bool(flags[0] or flags[1]) and not flags[3])
+            if not included and not flags[4] and not flags[3]:
+                raise ValueError('Excluded source requires a complete mate scan')
+            count += 1
+            batch.append((int(row['id']),row['Sample'],row['GCFID'],row['CramFilePath'],
+                          status,included,*flags))
+            if len(batch) == 10000:
+                connection.executemany('INSERT INTO reference_mate_audit VALUES (?,?,?,?,?,?,?,?,?,?,?)',batch)
+                batch.clear()
+        if batch:
+            connection.executemany('INSERT INTO reference_mate_audit VALUES (?,?,?,?,?,?,?,?,?,?,?)',batch)
+    bounds = connection.execute('SELECT MIN(id),MAX(id) FROM reference_mate_audit').fetchone()
+    if not count or bounds != (1,count):
+        raise ValueError('Mate audit must cover all original contiguous input row IDs')
+    return count
+
+
+def build_index(records, output, fna=None, fai=None, mate_audit=None):
     if (fna is None) != (fai is None):
         raise ValueError("Supply both --fna and --fai, or neither for legacy CRAM-only mode")
     records, output = Path(records), Path(output)
@@ -96,9 +142,10 @@ def build_index(records, output, fna=None, fai=None):
             definition = ", ".join(quoted(c) + " TEXT NOT NULL" for c in columns)
             connection.execute("CREATE TABLE reference_records (id INTEGER PRIMARY KEY, " + definition + ")")
             connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            audit_count = import_mate_audit(connection, mate_audit) if mate_audit else None
             insert = ("INSERT INTO reference_records VALUES (" +
                       ",".join("?" for _ in range(len(columns) + 1)) + ")")
-            batch, count = [], 0
+            batch, count, indexed = [], 0, 0
             for count, row in enumerate(reader, 1):
                 if None in row or any(value is None for value in row.values()):
                     raise ValueError(f"CSV record {count}: wrong field count")
@@ -111,6 +158,15 @@ def build_index(records, output, fna=None, fai=None):
                     value = float(row[name])
                     if not math.isfinite(value) or value < 0:
                         raise ValueError(f"CSV record {count}: {name} must be finite and nonnegative")
+                if mate_audit:
+                    observed = connection.execute(
+                        'SELECT Sample,GCFID,CramFilePath,included FROM reference_mate_audit WHERE id=?',
+                        (count,)).fetchone()
+                    if observed is None or observed[:3] != (row['Sample'],row['GCFID'],row['CramFilePath']):
+                        raise ValueError(f'Mate audit identity differs from original input row {count}')
+                    if not observed[3]:
+                        continue
+                indexed += 1
                 batch.append((count, *(row[c] for c in columns)))
                 if len(batch) == 10000:
                     connection.executemany(insert, batch)
@@ -118,23 +174,33 @@ def build_index(records, output, fna=None, fai=None):
                     print(f"Indexed {count} records", flush=True)
             if not count:
                 raise ValueError("CSV has no data records")
+            if mate_audit and audit_count != count:
+                raise ValueError('Mate audit row count differs from original CSV')
+            if not indexed:
+                raise ValueError('No identifiable mate-labelled references remain')
             if batch:
                 connection.executemany(insert, batch)
             connection.execute("CREATE INDEX reference_gcf_sample ON reference_records(GCFID, Sample, id)")
             gcfs = connection.execute("SELECT COUNT(DISTINCT GCFID) FROM reference_records").fetchone()[0]
             metadata = dict(schema="coverage-raw-cram-index-1", version=__version__,
                             source_csv=str(records.resolve()), columns=columns,
-                            records=count, gcfs=gcfs, row_order="1-based CSV data-record order",
+                            records=indexed, gcfs=gcfs,
+                            row_order="1-based original CSV data-record order" if mate_audit else "1-based CSV data-record order",
                             coverage_depth_basis="source CSV, not recalculated",
                             alignment_files_checked=False)
+            if mate_audit:
+                metadata.update(source_records=count, excluded_mate_records=count-indexed,
+                                mate_audit_file=str(Path(mate_audit).resolve()),
+                                mate_filter='At least one identifiable mate label; no observed invalid flags',
+                                mate_presence_audited=True)
             if fna is not None:
                 metadata.update(add_catalog(connection, fna, fai))
             connection.executemany("INSERT INTO metadata VALUES (?,?)",
                                    ((key, json.dumps(value, ensure_ascii=False)) for key, value in metadata.items()))
             connection.commit()
             if fna is not None:
-                print(f"Catalog: {metadata['catalog_gcfs']} IDs; all {count} CRAM records matched FNA + FAI", flush=True)
-            print(f"Complete: {count} records, {gcfs} GCFs -> {output}", flush=True)
+                print(f"Catalog: {metadata['catalog_gcfs']} IDs; all {indexed} indexed CRAM records matched FNA + FAI", flush=True)
+            print(f"Complete: {indexed} indexed / {count} input records, {gcfs} GCFs -> {output}", flush=True)
             return metadata
         except BaseException:
             if connection is not None:
@@ -153,10 +219,11 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="New SQLite file; parent must exist")
     parser.add_argument("--fna", type=Path, help="FNA mapping CSV: GCF_ID,GCF_path")
     parser.add_argument("--fai", type=Path, help="FAI mapping CSV: GCF_ID,FAI_path")
+    parser.add_argument("--mate-audit", type=Path, help="Complete mate presence TSV; omit unidentifiable sources from reference_records")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args()
     try:
-        build_index(args.records, args.output, args.fna, args.fai)
+        build_index(args.records, args.output, args.fna, args.fai, args.mate_audit)
     except (OSError, ValueError, sqlite3.Error) as error:
         parser.exit(1, f"ERROR: {error}\n")
 

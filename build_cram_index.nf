@@ -10,6 +10,7 @@ workflow {
         channel.value(file(params.records, checkIfExists: true)),
         channel.value(file(params.fna, checkIfExists: true)),
         channel.value(file(params.fai, checkIfExists: true)),
+        channel.value(params.mate_audit ? [file(params.mate_audit, checkIfExists: true)] : []),
         channel.value(file("${projectDir}/bin/build_cram_index.py", checkIfExists: true))
     )
 }

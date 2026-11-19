@@ -206,3 +206,8 @@ external unscored|replace; this rerun selects replace, with per-slot replacement
 audit, deterministic RNG, complete-unit sampling, unchanged150bp tolerance and
 1000-slot denominator. Unlabelled-reference compatibility remains a separate
 user choice. Deliver prior49-query/152capacity-slot detailed tables as well.
+
+User follow-up locks final exclusion of unidentifiable mate references, with
+standalone provenance. Optional --mate-audit catalog filtering preserves original
+row IDs and rejects incomplete/error inventories. Capacity replacement is the
+only new sampling-policy parameter; no fallback guessing of unlabelled mates.
