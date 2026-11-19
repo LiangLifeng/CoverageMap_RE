@@ -1,3 +1,10 @@
+> Current v1.3.2: optional `--m5_policy geometry_only` accepts header M5
+> mismatches only when contig SN/LN and the authoritative FASTA layout agree;
+> source-level M5 audit is written for every decoded Query and Reference.
+>
+> Current v1.3.1: Reference source Depth QC is enforced at query planning with
+> Nextflow --min_reference_depth (default 5x). It is separate from --depth_threshold.
+>
 > Current v1.3.0: rebuild with --mate-audit to exclude unidentifiable reference mates.
 > Nextflow --insufficient_reference_policy unscored|replace selects capacity behavior; this run uses replace.
 > Details below supersede the historical no-redraw source policy for replace mode only.
@@ -173,3 +180,88 @@ reuse the policy-keyed shared cache, so some archives are loaded for preflight
 and again for scoring while raw decoding is cached. No speed claim is made.
 All scientific statistics and optional methods/grid consume only the final frozen
 slot arrays. No threshold, tolerance, clinical label or manifest row is altered.
+
+## v1.3.1 Reference minimum-depth quality gate (2026-11-19)
+
+- New Nextflow flag: `--min_reference_depth 5` (Python planner:
+  `--min-reference-depth 5`). This is a **minimum reference-source
+  manifest/CSV Depth**, inclusive, for **both** low and high Query branches.
+  It is not a restriction on query depth or a re-estimate from CRAM alignment.
+  `--depth_threshold 5` continues to choose the Query sampling branch only.
+- Candidate rules: same GCF, exclude same sample/path and collapse duplicate
+  source paths, positive source Depth, `ref.Depth >= min_reference_depth`
+  for **all** queries; additionally `ref.Depth >= query.Depth` for a low
+  query (`query.Depth <= depth_threshold`). High queries still compare full
+  source coverage; no full-depth matching or upsampling is added.
+- Exclusions happen **before** seeded source selection. The replacement pool
+  is built from that same filtered set, so `replace` cannot reintroduce a
+  below-floor source. `--min_reference_depth 0` restores the old selection
+  floor (zero-depth records remain excluded, as previously).
+- Source CSV Depth is **metadata only**. Actual eligible aligned bases and
+  Read1/Read2 capacities continue to be checked under the existing
+  150-bp tolerance and replacement policy. A declared >=5x source can still
+  have insufficient actual usable capacity.
+- Per-query `reference_depth_audit.json` records available distinct sources
+  before depth filtering, distinct sample support, the number excluded below
+  the reference floor, the number excluded by the low-Query depth check, and
+  the final eligible pool. The same exclusion counts and configured floor
+  appear in summary.json/summary.tsv, including unscored queries. Fatal SCORE
+  failure audits retain the depth-audit JSON.
+- The raw CRAM SQLite index, mate-label filter, random seed, per-slot
+  sampling, null model, AND decision and scientific threshold methods are not
+  modified. A change in the eligible source roster may change RNG-selected
+  identities and resulting scores: this is an intentional source-QC
+  policy change, not a numerical parity promise.
+- For the NHB 344-query cohort, compare baseline vs filtered
+  `draws.tsv` joined to SQLite `reference_records` by reference_id,
+  count sub-5x selected slots separately by low/high arms and check the
+  changed eligible-support/unscored rates before approval.
+
+## v1.3.2 Configurable CRAM/BAM header M5 policy (2026-11-19)
+
+Use Nextflow `--m5_policy strict|geometry_only`, passed to Python as
+`raw_cram_query.py plan --m5-policy`. The default is **strict**.
+
+- `strict`: each observed contig's alignment-header `@SQ M5` must match
+  the digest computed from the exact SQL-cataloged FNA sequence. A missing
+  M5 is rejected; missing entire contigs remain allowed as before.
+- `geometry_only`: keep the authoritative FNA/FAI contig ID, length,
+  ordering, offsets and computed M5 for all coverage geometry. Allow a
+  differing or missing alignment-header M5 **without replacing the FNA
+  checksum or modifying the alignment**, and record the discrepancy.
+- A SQL FNA/FAI catalog is mandatory for `geometry_only`. Legacy CRAM-only
+  indexes without a full FASTA are rejected for this mode.
+- SN duplicates/unknown contigs and LN disagreements are rejected under
+  **both** policies. A contig absent from alignment @SQ contributes zero
+  coverage under the full FNA denominator. `skip` is intentionally unsupported.
+- If the underlying CRAM requires a source reference for decoding and
+  HTSlib cannot decode it, `geometry_only` still fails; no reference
+  reconstruction, sequence bypass, or M5 rewriting is attempted.
+
+Each decoded source is appended once to `m5_audit.jsonl`, with a final deduplicated
+`m5_audit.json` written at completion or failure; this avoids repeatedly rewriting
+a growing audit on hundreds of Reference CRAMs. The final JSON includes Query and each
+decoded Reference source identifier, path, policy, cache hit, per-source
+mismatch/missing-M5 counts, and per-contig `contig_id`, `length`,
+`fna_m5`, `cram_m5`, `status` (`MATCH`, `MISMATCH`,
+`MISSING_M5`, `MISSING_CONTIG`). The source status is `PASS`,
+`MISMATCH_ALLOWED`, `NOT_VALIDATED` (legacy FAI-only), or `ERROR`.
+Strict failures include per-contig M5 evidence in the persisted failure
+audit. The cache serializes the audit and includes `m5_policy` in its
+key, so policy changes cannot silently reuse a differently validated
+geometry cache. The numeric scoring contract and reference replacement
+rules are not changed.
+
+**Interpretation limitation:** SN/LN identity does not prove that two
+different FASTA sequences are coordinate-equivalent. Use
+`geometry_only` only when provenance establishes that the CRAM
+coordinates are comparable; follow up with the upstream generation team
+for any unexpected digest disagreement. Do not interpret a permitted M5
+mismatch as evidence that the underlying sequences are identical.
+
+**Codex NHB validation:** test Query and Reference mismatches separately,
+strict error audit and failure persistence, missing M5, missing/unknown
+contigs, SN/LN mismatch rejection, `replace` path, Read/Fragment,
+cold/warm geometry cache and policy-specific cache keys; then test
+reproducibility and output comparisons in native Nextflow with both
+`--m5_policy` modes.
