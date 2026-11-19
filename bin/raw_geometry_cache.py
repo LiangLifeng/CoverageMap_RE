@@ -56,6 +56,12 @@ def _read_cache(path, reference):
         pool.sampling_unit = info['sampling_unit']
         if pool.sampling_unit not in ('read', 'fragment'):
             raise ValueError('Invalid cached sampling unit')
+        m5_audit = info.get("m5_audit")
+        if (not isinstance(m5_audit, list) or
+                any(not isinstance(r, dict) for r in m5_audit) or
+                (m5_audit and [r.get("contig_id") for r in m5_audit] != list(reference.names))):
+            raise ValueError("Incomplete geometry cache M5 audit")
+        pool.m5_audit = m5_audit
         layout = Reference(reference.names, reference.lengths, tuple(info["md5"]),
                            tuple(info["missing"]), reference.sort_policy)
         merge_references(reference, layout)
@@ -65,7 +71,8 @@ def _read_cache(path, reference):
 def _write_cache(path, pool, layout, missing):
     info = dict(schema=CACHE_SCHEMA, genome_len=pool.genome_len,
                 aligned_bases=int(pool.total_bases), md5=layout.md5,
-                missing=missing, sampling_unit=pool.sampling_unit)
+                missing=missing, sampling_unit=pool.sampling_unit,
+                m5_audit=getattr(pool, "m5_audit", []))
     fd, temporary = tempfile.mkstemp(prefix=".geometry-", suffix=".npz", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as handle:
