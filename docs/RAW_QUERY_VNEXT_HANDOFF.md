@@ -1,3 +1,6 @@
+> Current v1.3.1: Reference source Depth QC is enforced at query planning with
+> Nextflow --min_reference_depth (default 5x). It is separate from --depth_threshold.
+>
 > Current v1.3.0: rebuild with --mate-audit to exclude unidentifiable reference mates.
 > Nextflow --insufficient_reference_policy unscored|replace selects capacity behavior; this run uses replace.
 > Details below supersede the historical no-redraw source policy for replace mode only.
@@ -173,3 +176,39 @@ reuse the policy-keyed shared cache, so some archives are loaded for preflight
 and again for scoring while raw decoding is cached. No speed claim is made.
 All scientific statistics and optional methods/grid consume only the final frozen
 slot arrays. No threshold, tolerance, clinical label or manifest row is altered.
+
+## v1.3.1 Reference minimum-depth quality gate (2026-11-19)
+
+- New Nextflow flag: `--min_reference_depth 5` (Python planner:
+  `--min-reference-depth 5`). This is a **minimum reference-source
+  manifest/CSV Depth**, inclusive, for **both** low and high Query branches.
+  It is not a restriction on query depth or a re-estimate from CRAM alignment.
+  `--depth_threshold 5` continues to choose the Query sampling branch only.
+- Candidate rules: same GCF, exclude same sample/path and collapse duplicate
+  source paths, positive source Depth, `ref.Depth >= min_reference_depth`
+  for **all** queries; additionally `ref.Depth >= query.Depth` for a low
+  query (`query.Depth <= depth_threshold`). High queries still compare full
+  source coverage; no full-depth matching or upsampling is added.
+- Exclusions happen **before** seeded source selection. The replacement pool
+  is built from that same filtered set, so `replace` cannot reintroduce a
+  below-floor source. `--min_reference_depth 0` restores the old selection
+  floor (zero-depth records remain excluded, as previously).
+- Source CSV Depth is **metadata only**. Actual eligible aligned bases and
+  Read1/Read2 capacities continue to be checked under the existing
+  150-bp tolerance and replacement policy. A declared >=5x source can still
+  have insufficient actual usable capacity.
+- Per-query `reference_depth_audit.json` records available distinct sources
+  before depth filtering, distinct sample support, the number excluded below
+  the reference floor, the number excluded by the low-Query depth check, and
+  the final eligible pool. The same exclusion counts and configured floor
+  appear in summary.json/summary.tsv, including unscored queries. Fatal SCORE
+  failure audits retain the depth-audit JSON.
+- The raw CRAM SQLite index, mate-label filter, random seed, per-slot
+  sampling, null model, AND decision and scientific threshold methods are not
+  modified. A change in the eligible source roster may change RNG-selected
+  identities and resulting scores: this is an intentional source-QC
+  policy change, not a numerical parity promise.
+- For the NHB 344-query cohort, compare baseline vs filtered
+  `draws.tsv` joined to SQLite `reference_records` by reference_id,
+  count sub-5x selected slots separately by low/high arms and check the
+  changed eligible-support/unscored rates before approval.

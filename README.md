@@ -1,4 +1,4 @@
-> CoverageMap_RE vNext 1.3.0: see [integration status and NHB test handoff](docs/RAW_QUERY_VNEXT_HANDOFF.md). Formal NHB acceptance remains pending.
+> CoverageMap_RE vNext 1.3.1: see [integration status and NHB test handoff](docs/RAW_QUERY_VNEXT_HANDOFF.md). Formal NHB acceptance remains pending.
 
 # CoverageMap
 

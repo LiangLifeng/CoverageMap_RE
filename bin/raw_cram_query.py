@@ -29,7 +29,7 @@ from bin.query_decision_methods import parse_methods, validate_options, COLUMNS 
 from bin.query_manifest import DISTRIBUTION_COLUMNS
 from bin.raw_query_outputs import legacy_outputs, unscored_outputs, read_rows
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 SUMMARY = ("query_id", "Sample", "GCFID", "status", "error", "arm", "manifest_depth",
            "actual_query_depth", "available_count", "eligible_count", "requested_draws",
            "valid_draws", "unique_references", "duplicate_draws", "decoded_reference_files",
@@ -37,7 +37,9 @@ SUMMARY = ("query_id", "Sample", "GCFID", "status", "error", "arm", "manifest_de
            "pearson", "pearson_p", "pearson_status", "pearson_decision", "detection_status",
            "sampling_tolerance_bp", "tolerated_undershoot_draws", "tolerated_overshoot_draws",
            "out_of_tolerance_draws", "geometry_cache_hits", "query_read1_bases", "query_read2_bases",
-           "insufficient_reference_policy", "replaced_draws", "replacement_attempts")
+           "insufficient_reference_policy", "replaced_draws", "replacement_attempts",
+           "min_reference_depth", "excluded_below_min_reference_depth",
+           "excluded_below_query_depth", "available_distinct_samples")
 SUMMARY = tuple(dict.fromkeys((*SUMMARY, *DISTRIBUTION_COLUMNS, "query_exit_code", "result_source")))
 DRAWS = ("draw_id", "reference_id", "reference_sample", "reference_path", "status", "error",
          "rng_sha256", "selected_ids_sha256", "selected_units", "selected_reads",
@@ -106,13 +108,17 @@ def fai_mapping(path):
         return result
 
 
-def candidates(connection, query, low):
-    # Source CSV depth is a planning value; actual insufficient mass is never upsampled.
+def candidates(connection, query, low, min_reference_depth=5, depth_audit=None):
+    """Select distinct source paths; enforce a reference QC floor on both query arms.
+
+    The SQL Depth is source metadata, not decoded aligned depth. Excluded
+    sources are never eligible for original draws or capacity replacements.
+    """
     rows = connection.execute(
         'SELECT id,Sample,GCFID,CramFilePath,Depth FROM reference_records '
         'WHERE GCFID=? ORDER BY Sample,id', (query["GCFID"],)).fetchall()
-    selected, seen = [], set()
-    available = 0
+    selected, seen, samples = [], set(), set()
+    available, below_floor, below_query = 0, 0, 0
     for row in rows:
         row = dict(row)
         depth = float(row["Depth"])
@@ -126,14 +132,30 @@ def candidates(connection, query, low):
             continue
         seen.add(path)
         available += 1
+        samples.add(row["Sample"])
+        if depth < min_reference_depth:
+            below_floor += 1
+            continue
         if low and depth < float(query["Depth"]):
+            below_query += 1
             continue
         row["CramFilePath"] = path
         selected.append(row)
+    if depth_audit is not None:
+        depth_audit.update(
+            min_reference_depth=min_reference_depth,
+            available_pre_depth_filter=available,
+            available_distinct_samples=len(samples),
+            excluded_below_min_reference_depth=below_floor,
+            excluded_below_query_depth=below_query,
+            eligible_after_depth_filter=len(selected),
+            eligible_distinct_samples=len({r["Sample"] for r in selected}))
     return available, selected
 
-
 def plan(args):
+    min_reference_depth = float(getattr(args, "min_reference_depth", 5))
+    if not math.isfinite(min_reference_depth) or min_reference_depth < 0:
+        raise ValueError("min_reference_depth must be finite and nonnegative")
     parse_methods(getattr(args, "jaccard_methods", "normal"))
     validate_options(args.alpha, getattr(args, "bootstrap_replicates", 1000),
                      getattr(args, "bootstrap_confidence", .95))
@@ -143,7 +165,8 @@ def plan(args):
                   sampling_tolerance_bp=getattr(args, "sampling_tolerance_bp", 150),
                   insufficient_reference_policy=getattr(args, "insufficient_reference_policy", "unscored"),
                   geometry_cache_dir=str(Path(args.geometry_cache_dir).expanduser().resolve()) if getattr(args, "geometry_cache_dir", None) else None,
-                  depth_threshold=args.depth_threshold, bin_count=args.bin_count,
+                  depth_threshold=args.depth_threshold, min_reference_depth=min_reference_depth,
+                  bin_count=args.bin_count,
                   window_size=args.window_size, sampling_unit=args.sampling_unit,
                   min_mapq=args.min_mapq, jaccard_coverage_threshold=args.jaccard_coverage_threshold,
                   threads=args.threads, min_samples=args.min_samples,
@@ -174,7 +197,11 @@ def plan(args):
         for number, query in enumerate(queries, 1):
             qid = f"q{number:08d}"
             spec = dict(schema="raw-cram-query-1", query_id=qid, query=query, config=config,
-                        references=[], choices=[], stamps={}, reference_errors={}, error="")
+                        references=[], choices=[], stamps={}, reference_errors={}, error="",
+                        reference_depth_audit=dict(min_reference_depth=min_reference_depth,
+                                                   excluded_below_min_reference_depth=0,
+                                                   excluded_below_query_depth=0,
+                                                   available_distinct_samples=0))
             dependencies = []
             try:
                 if None in query or any(v is None for v in query.values()):
@@ -197,10 +224,14 @@ def plan(args):
                 for path in dict.fromkeys([query["CramPath"], *optional]):
                     spec["stamps"][path] = stamp(path)
                     dependencies.append(path)
-                available, refs = candidates(connection, query, low)
+                depth_audit = spec["reference_depth_audit"]
+                available, refs = candidates(connection, query, low, min_reference_depth, depth_audit)
                 spec.update(available_count=available, eligible_count=len(refs))
                 if len({r["Sample"] for r in refs}) <= args.min_samples:
-                    status = ("INSUFFICIENT_REFERENCE_DEPTH" if low and available > args.min_samples
+                    depth_restricted = (depth_audit["excluded_below_min_reference_depth"] > 0 or
+                                        depth_audit["excluded_below_query_depth"] > 0)
+                    status = ("INSUFFICIENT_REFERENCE_DEPTH"
+                              if depth_restricted and depth_audit["available_distinct_samples"] > args.min_samples
                               else "INSUFFICIENT_REFERENCE_SAMPLES")
                     raise UnscoredQuery(status, "Requires eligible distinct reference samples > min-samples")
                 fna = None
@@ -259,7 +290,12 @@ def calculate(spec, output, *, extractor=extract_once):
                    manifest_depth=query.get("Depth", ""), requested_draws=count, valid_draws=0,
                    manifest_coverage=query.get("Coverage", ""),
                    decoded_reference_files=0, alpha=config["alpha"], detection_status="NOT_EVALUATED",
-                   available_count=spec.get("available_count", 0), eligible_count=spec.get("eligible_count", 0))
+                   available_count=spec.get("available_count", 0), eligible_count=spec.get("eligible_count", 0),
+                   min_reference_depth=config.get("min_reference_depth", 5),
+                   excluded_below_min_reference_depth=spec.get("reference_depth_audit", {}).get("excluded_below_min_reference_depth", 0),
+                   excluded_below_query_depth=spec.get("reference_depth_audit", {}).get("excluded_below_query_depth", 0),
+                   available_distinct_samples=spec.get("reference_depth_audit", {}).get("available_distinct_samples", 0))
+    dump(output / "reference_depth_audit.json", spec.get("reference_depth_audit", {}))
     if spec["error"]:
         return summary
     check_stamps(spec)
@@ -529,7 +565,7 @@ def score(args):
         if audit is not None:
             audit = Path(audit)
             audit.mkdir(parents=True, exist_ok=True)
-            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json', 'replacement_audit.json', 'replacement_audit.tsv', 'replacement_capacity_audit.json'):
+            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json', 'replacement_audit.json', 'replacement_audit.tsv', 'replacement_capacity_audit.json', 'reference_depth_audit.json'):
                 source = output / name
                 if source.is_file():
                     shutil.copyfile(source, audit / name)
@@ -603,6 +639,7 @@ def main():
     p.add_argument("--alpha", type=float, required=True)
     p.add_argument("--seed", type=int, default=401)
     p.add_argument("--depth-threshold", type=float, default=5)
+    p.add_argument("--min-reference-depth", type=float, default=5)
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--bin-count", type=int)
     group.add_argument("--window-size", type=int)
@@ -635,6 +672,7 @@ def main():
             if (args.reference_draws < 2 or args.sampling_tolerance_bp < 0 or args.min_samples < 0 or args.threads < 1 or args.min_mapq < 0
                     or not math.isfinite(args.alpha) or not 0 < args.alpha < 1
                     or not math.isfinite(args.depth_threshold) or args.depth_threshold < 0
+                    or not math.isfinite(args.min_reference_depth) or args.min_reference_depth < 0
                     or not math.isfinite(args.jaccard_coverage_threshold)
                     or not 0 <= args.jaccard_coverage_threshold <= 1
                     or (args.bin_count is not None and args.bin_count < 1)
