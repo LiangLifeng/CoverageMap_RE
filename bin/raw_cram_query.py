@@ -29,7 +29,7 @@ from bin.query_decision_methods import parse_methods, validate_options, COLUMNS 
 from bin.query_manifest import DISTRIBUTION_COLUMNS
 from bin.raw_query_outputs import legacy_outputs, unscored_outputs, read_rows
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 SUMMARY = ("query_id", "Sample", "GCFID", "status", "error", "arm", "manifest_depth",
            "actual_query_depth", "available_count", "eligible_count", "requested_draws",
            "valid_draws", "unique_references", "duplicate_draws", "decoded_reference_files",
@@ -156,6 +156,9 @@ def plan(args):
     min_reference_depth = float(getattr(args, "min_reference_depth", 5))
     if not math.isfinite(min_reference_depth) or min_reference_depth < 0:
         raise ValueError("min_reference_depth must be finite and nonnegative")
+    m5_policy = getattr(args, "m5_policy", "strict")
+    if m5_policy not in ("strict", "geometry_only"):
+        raise ValueError("m5_policy must be strict or geometry_only")
     parse_methods(getattr(args, "jaccard_methods", "normal"))
     validate_options(args.alpha, getattr(args, "bootstrap_replicates", 1000),
                      getattr(args, "bootstrap_confidence", .95))
@@ -166,7 +169,7 @@ def plan(args):
                   insufficient_reference_policy=getattr(args, "insufficient_reference_policy", "unscored"),
                   geometry_cache_dir=str(Path(args.geometry_cache_dir).expanduser().resolve()) if getattr(args, "geometry_cache_dir", None) else None,
                   depth_threshold=args.depth_threshold, min_reference_depth=min_reference_depth,
-                  bin_count=args.bin_count,
+                  m5_policy=m5_policy, bin_count=args.bin_count,
                   window_size=args.window_size, sampling_unit=args.sampling_unit,
                   min_mapq=args.min_mapq, jaccard_coverage_threshold=args.jaccard_coverage_threshold,
                   threads=args.threads, min_samples=args.min_samples,
@@ -235,6 +238,8 @@ def plan(args):
                               else "INSUFFICIENT_REFERENCE_SAMPLES")
                     raise UnscoredQuery(status, "Requires eligible distinct reference samples > min-samples")
                 fna = None
+                if m5_policy == "geometry_only" and not has_catalog:
+                    raise ValueError("geometry_only requires SQLite FNA/FAI catalog")
                 if has_catalog:
                     genome = connection.execute(
                         "SELECT FnaFilePath,FaiFilePath FROM reference_genomes WHERE GCFID=?",
@@ -296,6 +301,29 @@ def calculate(spec, output, *, extractor=extract_once):
                    excluded_below_query_depth=spec.get("reference_depth_audit", {}).get("excluded_below_query_depth", 0),
                    available_distinct_samples=spec.get("reference_depth_audit", {}).get("available_distinct_samples", 0))
     dump(output / "reference_depth_audit.json", spec.get("reference_depth_audit", {}))
+    m5_sources = {}
+
+    def record_m5(source_role, source_id, path, pool=None, cache_hit=None, error=None):
+        """Persist per-source M5 evidence, including failing strict extraction."""
+        rows = (getattr(error, "m5_audit", []) if error is not None else
+                getattr(pool, "m5_audit", []) if pool is not None else [])
+        source = dict(source_role=source_role, source_id=source_id,
+                      source_path=str(path), policy=config.get("m5_policy", "strict"),
+                      status=("ERROR" if error is not None else
+                              "NOT_VALIDATED" if not spec.get("fna") else
+                              "MISMATCH_ALLOWED" if any(r["status"] in ("MISMATCH", "MISSING_M5") for r in rows)
+                              else "PASS"),
+                      mismatch_contigs=sum(r["status"] == "MISMATCH" for r in rows),
+                      missing_m5_contigs=sum(r["status"] == "MISSING_M5" for r in rows),
+                      contigs=rows)
+        if cache_hit is not None:
+            source["geometry_cache_hit"] = bool(cache_hit)
+        if error is not None:
+            source["error"] = str(error)
+        m5_sources[(source_role, str(path))] = source
+        dump(output / "m5_audit.json", list(m5_sources.values()))
+
+    dump(output / "m5_audit.json", [])
     if spec["error"]:
         return summary
     check_stamps(spec)
@@ -310,10 +338,15 @@ def calculate(spec, output, *, extractor=extract_once):
             raise ValueError("SQL Genome FASTA/FAI contig dictionary mismatch")
     policies = dict(sampling_unit=config["sampling_unit"], min_mapq=config["min_mapq"],
                     coverage_alignment_policy=config.get("coverage_alignment_policy", "primary_only"),
-                    strict_reference=strict)
+                    strict_reference=strict, m5_policy=config.get("m5_policy", "strict"))
     cache_dir = config.get("geometry_cache_dir") if strict else None
-    query_pool, layout, missing, query_hit = cached_extract(
-        query["CramPath"], layout, extractor, cache_dir=cache_dir, **policies)
+    try:
+        query_pool, layout, missing, query_hit = cached_extract(
+            query["CramPath"], layout, extractor, cache_dir=cache_dir, **policies)
+    except (OSError, ValueError, OverflowError) as error:
+        record_m5("query", qid, query["CramPath"], error=error)
+        raise
+    record_m5("query", qid, query["CramPath"], query_pool, query_hit)
     summary["geometry_cache_hits"] = int(query_hit)
     edges = edges_for(layout, GCF_CONCAT, count=config["bin_count"], size=config["window_size"])
     lengths = np.diff(edges)
@@ -370,8 +403,13 @@ def calculate(spec, output, *, extractor=extract_once):
                     raise ValueError(spec['reference_errors'][str(refid)])
                 if os.path.samefile(query['CramPath'], ref['CramFilePath']):
                     raise ValueError('Reference aliases query source')
-                candidate, _, _, hit = cached_extract(
-                    ref['CramFilePath'], layout, extractor, cache_dir=cache_dir, **policies)
+                try:
+                    candidate, _, _, hit = cached_extract(
+                        ref['CramFilePath'], layout, extractor, cache_dir=cache_dir, **policies)
+                except (OSError, ValueError, OverflowError) as error:
+                    record_m5("reference", refid, ref["CramFilePath"], error=error)
+                    raise
+                record_m5("reference", refid, ref["CramFilePath"], candidate, hit)
                 summary['decoded_reference_files'] += int(not hit)
                 summary['geometry_cache_hits'] += int(hit)
                 info = dict(reference_id=refid, cache_hit=hit, capacities={})
@@ -427,6 +465,7 @@ def calculate(spec, output, *, extractor=extract_once):
                 raise ValueError("Reference aliases query source")
             pool, layout, omitted, cache_hit = cached_extract(
                 ref["CramFilePath"], layout, extractor, cache_dir=cache_dir, **policies)
+            record_m5("reference", refid, ref["CramFilePath"], pool, cache_hit)
             audit["decode_attempts"] = int(not cache_hit)
             summary["decoded_reference_files"] += int(not cache_hit)
             summary["geometry_cache_hits"] += int(cache_hit)
@@ -494,6 +533,8 @@ def calculate(spec, output, *, extractor=extract_once):
                             actual_bases=int(data.sum()), actual_depth=int(data.sum()) / layout.length)
             audit["status"] = ("READY" if all(draws[i]["status"] == "READY" for i in slots) else "PARTIAL")
         except (OSError, ValueError, OverflowError) as error:
+            if ("reference", str(ref["CramFilePath"])) not in m5_sources:
+                record_m5("reference", refid, ref["CramFilePath"], error=error)
             audit.update(status="ERROR", error=str(error))
             for number in slots:
                 draws[number].update(status="ERROR", error=str(error))
@@ -565,7 +606,7 @@ def score(args):
         if audit is not None:
             audit = Path(audit)
             audit.mkdir(parents=True, exist_ok=True)
-            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json', 'replacement_audit.json', 'replacement_audit.tsv', 'replacement_capacity_audit.json', 'reference_depth_audit.json'):
+            for name in ('summary.json', 'summary.tsv', 'draws.tsv', 'decode_audit.json', 'statistics.json', 'replacement_audit.json', 'replacement_audit.tsv', 'replacement_capacity_audit.json', 'reference_depth_audit.json', 'm5_audit.json'):
                 source = output / name
                 if source.is_file():
                     shutil.copyfile(source, audit / name)
@@ -640,6 +681,7 @@ def main():
     p.add_argument("--seed", type=int, default=401)
     p.add_argument("--depth-threshold", type=float, default=5)
     p.add_argument("--min-reference-depth", type=float, default=5)
+    p.add_argument("--m5-policy", choices=("strict", "geometry_only"), default="strict")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--bin-count", type=int)
     group.add_argument("--window-size", type=int)
