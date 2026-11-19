@@ -65,6 +65,20 @@ def dump(path, value):
     Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
 
 
+def finalize_m5_audit(output):
+    """Finalize an append-only audit journal in O(total evidence) time."""
+    output = Path(output)
+    journal = output / "m5_audit.jsonl"
+    if not journal.is_file():
+        return
+    sources = {}
+    with journal.open(encoding="utf-8") as handle:
+        for line in handle:
+            source = json.loads(line)
+            sources[(source["source_role"], source["source_path"])] = source
+    dump(output / "m5_audit.json", list(sources.values()))
+
+
 def table(path, columns, rows):
     with Path(path).open("w", newline="") as handle:
         writer = csv.DictWriter(handle, columns, delimiter="\t", lineterminator="\n", extrasaction="ignore")
@@ -321,7 +335,10 @@ def calculate(spec, output, *, extractor=extract_once):
         if error is not None:
             source["error"] = str(error)
         m5_sources[(source_role, str(path))] = source
-        dump(output / "m5_audit.json", list(m5_sources.values()))
+        with (output / "m5_audit.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(source, ensure_ascii=False, allow_nan=False) + "\n")
+        if error is not None:
+            finalize_m5_audit(output)
 
     dump(output / "m5_audit.json", [])
     if spec["error"]:
@@ -380,6 +397,7 @@ def calculate(spec, output, *, extractor=extract_once):
     del query_pool
     if target == 0:
         summary.update(status="ZERO_QUERY_DEPTH", error="No eligible aligned query bases")
+        finalize_m5_audit(output)
         return summary
     matrix = np.zeros((count, len(lengths)), dtype=np.int64)
     covered = np.zeros_like(matrix)
@@ -428,6 +446,7 @@ def calculate(spec, output, *, extractor=extract_once):
             table(output/'replacement_audit.tsv', tuple(replacements[0]) if replacements else ('draw_id','reason'), replacements)
             dump(output/'replacement_capacity_audit.json', list(preflight.values()))
             summary.update(status='INSUFFICIENT_REFERENCE_CAPACITY', error=str(error))
+            finalize_m5_audit(output)
             return summary
         summary.update(replaced_draws=sum(a != b for a,b in zip(spec['choices'], choices)),
                        replacement_attempts=len(replacements))
@@ -581,6 +600,7 @@ def calculate(spec, output, *, extractor=extract_once):
                    edges, config, nulls)
     if summary["status"] == "COMPLETE" and summary["detection_status"] == "NOT_EVALUATED":
         summary["status"] = "COMPLETE_WITH_GAPS"
+    finalize_m5_audit(output)
     return summary
 
 
@@ -597,6 +617,7 @@ def score(args):
             summary = calculate(spec, output)
         except (OSError, ValueError, OverflowError) as error:
             summary = dict(query_id=spec["query_id"], status="ERROR", error=str(error))
+    finalize_m5_audit(output)
     if not (output / "decision_methods.tsv").exists():
         unscored_outputs(output, summary, spec["config"])
     dump(output / "summary.json", summary)
