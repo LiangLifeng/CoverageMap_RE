@@ -113,3 +113,42 @@ def test_policy_defaults_strict_and_native_interface_wired(tmp_path):
     assert "m5_policy = 'strict'" in (root / "raw_query/nextflow.config").read_text()
     plan = (root / "modules/local/raw_query_plan/main.nf").read_text()
     assert plan.count("--m5-policy") == 2
+
+
+def test_no_ref_cram_m5_disagreement_uses_exact_fasta_layout(tmp_path):
+    from bin.coverage_core import canonical_reference, read_reference
+    spec, digest = _fixture(tmp_path)
+    source = Path(spec["query"]["CramPath"])
+    with pysam.AlignmentFile(str(source), "rb") as bam:
+        records = list(bam.fetch(until_eof=True))
+        header = bam.header.to_dict()
+    header["SQ"][0]["M5"] = "e" * 32
+    cram_path = tmp_path / "mismatch.cram"
+    with pysam.AlignmentFile(str(cram_path), "wc", header=header,
+                             format_options=[b"no_ref=1"]) as writer:
+        for read in records:
+            writer.write(read)
+    layout = canonical_reference(read_reference(spec["fna"]))
+    with pytest.raises(M5ValidationError, match="M5 mismatch"):
+        extract_once(cram_path, layout, strict_reference=True)
+    pool, kept, missing = extract_once(
+        cram_path, layout, strict_reference=True, m5_policy="geometry_only")
+    assert not missing
+    assert kept.md5 == (digest,)
+    assert pool.total_bases == 200
+    assert pool.m5_audit[0]["status"] == "MISMATCH"
+
+
+def test_m5_append_only_audit_has_single_final_entry_per_reference(tmp_path):
+    spec, _ = _fixture(tmp_path)
+    spec["config"]["insufficient_reference_policy"] = "replace"
+    result_dir = tmp_path / "audit"
+    result_dir.mkdir()
+    summary = calculate(spec, result_dir)
+    assert summary["valid_draws"] == 10
+    with (result_dir / "m5_audit.jsonl").open() as handle:
+        journal = [json.loads(line) for line in handle]
+    final = json.loads((result_dir / "m5_audit.json").read_text())
+    assert len(journal) >= len(final) == 2
+    assert {record["source_role"] for record in final} == {"query", "reference"}
+    assert all(record["contigs"][0]["status"] == "MATCH" for record in final)
