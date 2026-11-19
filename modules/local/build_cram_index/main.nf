@@ -14,7 +14,8 @@ process BUILD_CRAM_INDEX {
     path 'versions.yml', emit: versions
 
     script:
-    def mateAudit = mate_audit ? "--mate-audit '${mate_audit[0]}'" : ''
+    def auditFile = mate_audit instanceof List ? (mate_audit ? mate_audit.first() : null) : mate_audit
+    def mateAudit = auditFile ? "--mate-audit '${auditFile}'" : ''
     """
     export PATH="\$PWD/index_code:\$PATH"
     build_cram_index.py --records "${records}" --fna "${fna}" --fai "${fai}" ${mateAudit} --output reference_cram.sqlite
