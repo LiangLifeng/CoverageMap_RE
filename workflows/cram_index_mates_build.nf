@@ -29,11 +29,11 @@ workflow CRAM_INDEX_BUILD {
     }
     // Keep the original process name, tuple and staged code for native -resume.
     def known = params.mate_recovery_buckets ? params.mate_recovery_buckets.split(',').toList() : []
-    candidates = chunks.filter { meta, rows, deps -> !known.contains(meta.id.toString()) }
-    known_failed = chunks.filter { meta, rows, deps -> known.contains(meta.id.toString()) }
+    candidates = chunks.filter { meta, chunk_rows, deps -> !known.contains(meta.id.toString()) }
+    known_failed = chunks.filter { meta, chunk_rows, deps -> known.contains(meta.id.toString()) }
     CRAM_METRICS_CHUNK(candidates, ch_legacy_code)
     successful = CRAM_METRICS_CHUNK.out.metrics.map { shard -> tuple(shard.baseName, shard) }
-    failed = candidates.map { meta, rows, deps -> tuple(meta.id.toString(), meta, rows, deps) }
+    failed = candidates.map { meta, chunk_rows, deps -> tuple(meta.id.toString(), meta, chunk_rows, deps) }
         .join(successful, remainder: true)
         .filter { row -> row.size() == 4 || row[4] == null }
         .map { row -> tuple(row[1], row[2], row[3]) }
