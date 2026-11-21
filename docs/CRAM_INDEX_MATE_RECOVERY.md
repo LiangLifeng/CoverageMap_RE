@@ -1,8 +1,8 @@
 # Strict R1/R2 index recovery
 
 Use the separate `build_cram_index_mates.nf` entry with the original launch
-directory, work directory, session UUID, bucket parameters and staged legacy
-source checkout (`--cached_index_code`). The canonical CRAM_METRICS_CHUNK
+directory, work directory, session UUID, bucket parameters and original project
+checkout path. The original bundled executable remains byte-identical. The canonical CRAM_METRICS_CHUNK
 process and its inputs retain the old task hashes. Failed tasks route to a
 record-aware worker, which continues after a recognized mate-identity problem.
 Already known bad chunks can go directly to that worker through the comma

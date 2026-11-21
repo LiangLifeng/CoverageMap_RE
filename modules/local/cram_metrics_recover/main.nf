@@ -14,15 +14,15 @@ process CRAM_METRICS_RECOVER {
     cat > rows.json <<'ROWS_JSON'
     ${payload}
     ROWS_JSON
-    cram_index_metrics.py compute --strict-mates --chunk rows.json --output "${meta.id}.sqlite" --jobs ${task.cpus} --min-mapq ${params.index_min_mapq} --m5-policy ${params.index_m5_policy}
+    cram_index_mate_recovery.py compute --strict-mates --chunk rows.json --output "${meta.id}.sqlite" --jobs ${task.cpus} --min-mapq ${params.index_min_mapq} --m5-policy ${params.index_m5_policy}
     cat <<-VERSIONS > versions.yml
     "${task.process}":
-        cram_index_metrics.py: \$(cram_index_metrics.py --version)
+        cram_index_mate_recovery.py: \$(cram_index_mate_recovery.py --version)
     VERSIONS
     """
     stub:
     """
     touch "${meta.id}.sqlite"
-    echo 'cram_index_metrics.py: stub' > versions.yml
+    echo 'cram_index_mate_recovery.py: stub' > versions.yml
     """
 }

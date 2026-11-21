@@ -13,7 +13,6 @@ from test_computed_cram_index import fixture
 
 NEXTFLOW = os.environ.get('COVERAGEMAP_TEST_NEXTFLOW')
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY = Path(os.environ.get('COVERAGEMAP_TEST_LEGACY_INDEX_CODE', ROOT))
 
 
 @pytest.mark.skipif(not NEXTFLOW, reason='Requires native Nextflow')
@@ -46,7 +45,7 @@ def test_legacy_resume_and_strict_mates(tmp_path):
         configs = [ROOT/'nextflow.config', config]
         if index > 1:
             configs.append(recovery)
-        command = [NEXTFLOW,'-C',','.join(map(str,configs)),'run',str((LEGACY if index == 1 else ROOT)/entry),
+        command = [NEXTFLOW,'-C',','.join(map(str,configs)),'run',str(ROOT/entry),
                    '-work-dir',str(tmp_path/'work'),'-with-trace',str(tmp_path/f'trace-{index}.tsv'),
                    '--records',str(records),'--fna',str(fna),'--fai',str(fai),
                    '--outdir',str(tmp_path/f'result-{index}'),'--index_chunk_buckets','1',
@@ -59,7 +58,7 @@ def test_legacy_resume_and_strict_mates(tmp_path):
     launch(1, 'build_cram_index.nf')
     with records.open('a', newline='') as stream:
         csv.writer(stream).writerows([('c',bad,'GCF_1.1',0,0),('d',good,'GCF_1.1',0,0)])
-    launch(2, 'build_cram_index_mates.nf', ('-resume','--cached_index_code',str(LEGACY)))
+    launch(2, 'build_cram_index_mates.nf', ('-resume',))
     with (tmp_path/'trace-2.tsv').open() as stream:
         rows = list(csv.DictReader(stream, delimiter='\t'))
     assert sorted(r['status'] for r in rows if 'CRAM_METRICS_CHUNK' in r['name']) == ['CACHED','FAILED']
@@ -72,3 +71,11 @@ def test_legacy_resume_and_strict_mates(tmp_path):
         exclusions = list(csv.DictReader(stream, delimiter='\t'))
     assert [(r['OriginalCSVRow'],r['Reason']) for r in exclusions] == [
         ('2','UNLABELLED_READS'), ('3','AMBIGUOUS_READ_IDENTITY')]
+
+    launch(3, 'build_cram_index_mates.nf', ('-resume','--mate_recovery_buckets','bucket-0-part-1'))
+    with (tmp_path/'trace-3.tsv').open() as stream:
+        rows = list(csv.DictReader(stream, delimiter='\t'))
+    assert [r['status'] for r in rows if 'CRAM_METRICS_CHUNK' in r['name']] == ['CACHED']
+    assert [r['status'] for r in rows if 'CRAM_METRICS_RECOVER' in r['name']] == ['CACHED']
+    assert (out/'excluded_crams.tsv').read_bytes() == (
+        tmp_path/'result-3/cram_index/excluded_crams.tsv').read_bytes()

@@ -14,15 +14,15 @@ process CRAM_METRICS_MATE_MERGE {
     script:
     """
     export PATH="\$PWD/metric_code/bin:\$PATH"
-    cram_index_metrics.py merge --excluded-tsv excluded_crams.tsv --records "${records}" --chunk-dir shards --fna "${fna}" --fai "${fai}" --output reference_cram.sqlite --min-mapq ${params.index_min_mapq} --m5-policy ${params.index_m5_policy}
+    cram_index_mate_recovery.py merge --excluded-tsv excluded_crams.tsv --records "${records}" --chunk-dir shards --fna "${fna}" --fai "${fai}" --output reference_cram.sqlite --min-mapq ${params.index_min_mapq} --m5-policy ${params.index_m5_policy}
     cat <<-VERSIONS > versions.yml
     "${task.process}":
-        cram_index_metrics.py: \$(cram_index_metrics.py --version)
+        cram_index_mate_recovery.py: \$(cram_index_mate_recovery.py --version)
     VERSIONS
     """
     stub:
     """
     touch reference_cram.sqlite excluded_crams.tsv
-    echo 'cram_index_metrics.py: stub' > versions.yml
+    echo 'cram_index_mate_recovery.py: stub' > versions.yml
     """
 }
