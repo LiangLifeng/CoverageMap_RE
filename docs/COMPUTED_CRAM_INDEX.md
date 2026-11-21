@@ -55,3 +55,25 @@ source Depth/Coverage ignored; unchanged SQL field types/order/views/index and
 old query candidate lookup; serial/parallel equality; disjoint/exhaustive chunks,
 missing/duplicate/policy-mismatched shards rejected; failure/no overwrite;
 strict native Nextflow initial/resume/changed-source and stub acceptance.
+
+## SQL examples (no CRAM access)
+
+```sql
+SELECT r.id,r.Sample,r.GCFID,r.Depth,r.Coverage,
+       m.read1_count,m.read2_count,m.read1_bases,m.read2_bases,
+       m.read1_depth,m.read2_depth,m.read1_coverage,m.read2_coverage
+FROM reference_records r JOIN reference_metrics m ON r.id=m.id
+WHERE r.GCFID=? ORDER BY r.Sample,r.id;
+```
+
+The unchanged `reference_records` fields remain TEXT, including numeric strings
+for recalculated Depth/Coverage; metrics in the auxiliary table have numeric
+SQLite types. Coverage values are percent; counts and capacities are integers.
+`source_records` is provenance and must not be used as the candidate pool.
+
+On NHB add `-c <cpu_only.config>,<code>/examples/nhb/computed_cram_index.config`
+for explicit /disk scratch. Use `-profile slurm,nhb -qs 100` and omit memory/time
+requests. Formal runs are user-submitted; never reuse/overwrite the labelled
+production SQL. After a failed run use the same source, inputs, work directory,
+outdir and `-resume`; valid chunks are cached. A deliberate completed-dataset
+revision requires a new output directory because published indexes are immutable.
