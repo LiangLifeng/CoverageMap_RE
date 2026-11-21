@@ -1,5 +1,13 @@
 # Acceptance
 
+## 2026-11-21 Computed chunked CRAM SQL index
+
+User requests rebuilding the three-input catalog with program-calculated depth,
+coverage and full R1/R2 capacity metrics while preserving existing SQL fields.
+See [the controlling contract](COMPUTED_CRAM_INDEX.md) for calculation, chunking,
+compatibility, provenance, failure and acceptance requirements.
+
+
 ## Jaccard coverage breadth
 
 [Jaccard breadth](JACCARD_BREADTH.md) defines shared query/reference union counts,

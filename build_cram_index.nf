@@ -2,16 +2,14 @@
 include { CRAM_INDEX_BUILD } from './workflows/cram_index_build'
 
 workflow {
-    if (!params.records)
-        error 'Specify --records with the BuildInput CSV'
-    if (!params.fna || !params.fai)
-        error 'Specify --fna and --fai with the reference mapping CSVs'
+    if (!params.records || !params.fna || !params.fai)
+        error 'Specify --records, --fna and --fai'
+    if (params.mate_audit)
+        error 'Computed indexing scans mate labels itself; omit --mate_audit'
     CRAM_INDEX_BUILD(
         channel.value(file(params.records, checkIfExists: true)),
         channel.value(file(params.fna, checkIfExists: true)),
         channel.value(file(params.fai, checkIfExists: true)),
-        channel.value(params.mate_audit ? [file(params.mate_audit, checkIfExists: true)] : []),
-        channel.value(file("${projectDir}/bin/build_cram_index.py", checkIfExists: true))
+        channel.value(['cram_index_metrics.py', 'build_cram_index.py', 'raw_cram_pool.py', 'coverage_core.py', '__init__.py'].collect { name -> file("${projectDir}/bin/${name}", checkIfExists: true) })
     )
 }
-

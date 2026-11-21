@@ -1,5 +1,13 @@
 # I/O contract
 
+## 2026-11-21 Computed chunked CRAM SQL index
+
+User requests rebuilding the three-input catalog with program-calculated depth,
+coverage and full R1/R2 capacity metrics while preserving existing SQL fields.
+See [the controlling contract](COMPUTED_CRAM_INDEX.md) for calculation, chunking,
+compatibility, provenance, failure and acceptance requirements.
+
+
 ## Capture scratch and reference-free field decoding
 
 [Reference capture I/O](REFERENCE_CAPTURE_IO.md) defines the geometry-only CRAM
