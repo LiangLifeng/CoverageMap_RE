@@ -82,3 +82,21 @@ def test_sql_preflight_reduces_decodes_without_changing_science(tmp_path):
         assert (tmp_path/'original'/name).read_bytes()==(tmp_path/'optimized'/name).read_bytes()
     audit=json.loads((tmp_path/'optimized/replacement_capacity_audit.json').read_text())
     assert audit and all(r['capacity_source']=='sqlite' for r in audit)
+
+
+def test_sql_capacity_does_not_bypass_self_source_guard(tmp_path):
+    import pytest
+    from bin.cram_index_metrics import measure
+    from bin.indexed_reference_metrics import FIELDS
+    from bin.raw_cram_query import calculate,stamp
+    from test_raw_query_vnext import _fixture
+    spec,_=_fixture(tmp_path)
+    alias=tmp_path/'hardlink-query.bam';os.link(spec['query']['CramPath'],alias)
+    ref=spec['references'][0];ref['CramFilePath']=str(alias)
+    spec['stamps'][str(alias)]=stamp(alias)
+    _,metric=measure((dict(id=ref['id'],row=ref,fna=spec['fna'],fai=spec['fai']),0,'strict'))
+    ref['sql_capacity']={key:metric[key] for key in FIELDS}
+    spec['config']['insufficient_reference_policy']='replace'
+    output=tmp_path/'guard';output.mkdir()
+    with pytest.raises(ValueError,match='aliases query source'):
+        calculate(spec,output)

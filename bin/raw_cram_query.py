@@ -419,15 +419,15 @@ def calculate(spec, output, *, extractor=extract_once):
         def capacity(ref, arm):
             refid = ref['id']
             if refid not in preflight:
+                if str(refid) in spec['reference_errors']:
+                    raise ValueError(spec['reference_errors'][str(refid)])
+                if os.path.samefile(query['CramPath'], ref['CramFilePath']):
+                    raise ValueError('Reference aliases query source')
                 from_sql = indexed_capacities(ref, sampling_arms, spec)
                 if from_sql is not None:
                     preflight[refid] = dict(reference_id=refid, cache_hit=None,
                                            capacity_source='sqlite', capacities=from_sql)
                     return from_sql[arm.name]
-                if str(refid) in spec['reference_errors']:
-                    raise ValueError(spec['reference_errors'][str(refid)])
-                if os.path.samefile(query['CramPath'], ref['CramFilePath']):
-                    raise ValueError('Reference aliases query source')
                 try:
                     candidate, _, _, hit = cached_extract(
                         ref['CramFilePath'], layout, extractor, cache_dir=cache_dir, **policies)
