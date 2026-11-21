@@ -1,7 +1,7 @@
 # Computed CRAM index (2026-11-21)
 
 User inputs: BuildInput_all_virus_347993.csv, fna.csv, fai_path.csv. New
-`build_cram_index.nf` defaults to computed indexing, with chunk size100 and four
+`build_cram_index.nf` defaults to computed indexing, with maximum chunk size100, 4096 fixed identity buckets and four
 worker processes per chunk. Formal real-data runs remain user-owned.
 
 Preserve `coverage-raw-cram-index-1`, the exact input column names/order/TEXT
@@ -36,15 +36,19 @@ there is no silently partial final database. Successfully computed chunks remain
 available for Nextflow -resume. Source-file metadata dependencies and tracked
 calculation helpers invalidate affected tasks; no per-file SHA or CRAM copies.
 
-DAG: plan validates CSV associations and emits fixed-row chunks; per-chunk
-ProcessPool workers decode each row once; serial SQLite merge copies only small
-scalar tables and adds catalogs. No shared concurrent SQLite writer. No new
+DAG: CSV rows enter the Nextflow channel, combine with exact FNA/FAI mappings,
+then group by a fixed deterministic hash bucket of (Sample,CramFilePath,GCFID).
+Each bucket is sorted, duplicate identities are collapsed, and subdivided into
+chunks of at most100. Per-chunk ProcessPool workers decode each unique identity
+once. Serial SQLite merge reads the current original CSV, restores its ordinal
+IDs/duplicate rows and every original cell, and copies scalar metrics by identity.
+There is no whole-CSV PLAN task. No shared concurrent SQLite writer. No new
 Slurm memory/time requests; executor queue size bounds cluster concurrency.
 Cache invalidation uses ordinary Nextflow file fingerprints; it does not detect
 malicious changes that preserve all file metadata. Use a fresh output directory;
 never replace the current in-use database.
 
-Parameters: --index_chunk_size100 --index_chunk_cpus4 --index_min_mapq0
+Parameters: --index_chunk_size100 --index_chunk_buckets4096 --index_chunk_cpus4 --index_min_mapq0
 --index_m5_policy geometry_only. Old --mate_audit is rejected by the computed
 entry because flags are fully scanned here. The old metadata-only Python API is
 retained for existing callers and explicitly does not recalculate values.
@@ -77,3 +81,31 @@ requests. Formal runs are user-submitted; never reuse/overwrite the labelled
 production SQL. After a failed run use the same source, inputs, work directory,
 outdir and `-resume`; valid chunks are cached. A deliberate completed-dataset
 revision requires a new output directory because published indexes are immutable.
+
+## Resume after source changes or input deletions
+
+Keep the bucket count and chunk size unchanged. A CSV deletion/reorder does not
+change unrelated buckets; only affected bucket parts are recomputed. Deleting a
+duplicate identity may require no metric recomputation. Each CRAM and associated
+FNA/FAI is a tracked file dependency, so ordinary content/mtime changes invalidate
+its chunk without invalidating unrelated chunks. The final SQL always reflects
+the current input membership and ordinal IDs; deleted records cannot persist.
+Use the same work/cache and -resume, but a new --outdir after revising a completed
+dataset. This keeps the prior complete SQL intact. This design does not reuse
+old whole-CSV PLAN caches. Chunk source identities exclude upstream numeric
+Depth/Coverage, so correcting only those provenance values reruns merge rather
+than CRAM calculations. Fixed buckets intentionally trade small scheduler overhead
+for predictable cache reuse; no measured cluster speed ratio is claimed.
+
+## Query scalar-capacity reuse
+
+The existing candidate API still reads recalculated reference_records.Depth.
+For replace preflight, the planner attaches only compact reference_metrics scalar
+capacities when MAPQ, primary coverage and M5 policies match. The scorer checks
+CRAM/FNA/FAI size and mtime before using capacities. Stale or absent metrics and
+legacy databases fall back to actual extraction. Audit rows report capacity_source
+sqlite or geometry. No SQL-derived geometry or random IDs are invented: retained
+references still undergo the original sampling/extraction and M5 checks. Selected
+IDs, coverage arrays, scores and replacement RNG remain unchanged. The synthetic
+rejection test proves an insufficient reference is not decoded solely to check
+capacity, while downstream scientific arrays match the original path exactly.

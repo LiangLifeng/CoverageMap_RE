@@ -24,12 +24,19 @@ def test_native_chunks_resume_and_source_dependency(tmp_path):
           '-work-dir',str(tmp_path/'work'),'--records',str(records),'--fna',str(fna),'--fai',str(fai),
           '--index_chunk_size','2','--index_chunk_cpus','2']
     env=dict(os.environ,NXF_SYNTAX_PARSER='v2',NXF_OFFLINE='true')
-    for n,extra in [(1,[]),(2,['-resume']),(3,['-resume'])]:
+    for n in range(1,6):
+        extra=[] if n==1 else ['-resume']
         if n==3:
             src=tmp_path/'unlabelled.bam';st=src.stat()
             os.utime(src,ns=(st.st_atime_ns,st.st_mtime_ns+2_000_000_000))
+        if n==4:
+            records.write_text(records.read_text().replace(next(line for line in records.read_text().splitlines() if line.startswith('u,'))+'\n',''))
+        if n==5:
+            first=list(csv.DictReader(records.open()))[0]
+            with records.open('a',newline='') as handle:
+                csv.writer(handle).writerow(['new',first['CramFilePath'],first['GCFID'],'unused','unused'])
         trace=tmp_path/f'trace-{n}.tsv'
-        out=tmp_path/('output' if n<3 else 'output-source-change')
+        out=tmp_path/('output' if n<3 else f'output-{n}')
         cmd=base+['--outdir',str(out),'-with-trace',str(trace)]+extra
         result=subprocess.run(cmd,cwd=tmp_path,env=env,text=True,capture_output=True,timeout=180)
         (tmp_path/f'command-{n}.json').write_text(json.dumps(cmd,indent=2))
@@ -37,11 +44,14 @@ def test_native_chunks_resume_and_source_dependency(tmp_path):
         assert result.returncode==0,result.stdout+result.stderr
         rows=list(csv.DictReader(trace.open(),delimiter='\t'))
         chunks=[r for r in rows if 'CRAM_METRICS_CHUNK' in r['name']]
-        assert len(chunks)==2
-        expected=['COMPLETED','COMPLETED'] if n==1 else ['CACHED','CACHED'] if n==2 else ['CACHED','COMPLETED']
+        assert len(chunks)==(1 if n==4 else 2)
+        expected=(['COMPLETED','COMPLETED'] if n==1 else ['CACHED','CACHED'] if n==2 else
+                  ['CACHED'] if n==4 else ['CACHED','COMPLETED'])
         assert sorted(r['status'] for r in chunks)==sorted(expected)
         with sqlite3.connect(out/'cram_index/reference_cram.sqlite') as db:
-            assert db.execute('SELECT COUNT(*) FROM reference_metrics').fetchone()[0]==3
+            assert db.execute('SELECT COUNT(*) FROM reference_metrics').fetchone()[0]==(2 if n==4 else 3)
+            if n>=4:
+                assert not db.execute("SELECT 1 FROM source_records WHERE Sample='u'").fetchall()
             assert db.execute('SELECT read1_bases,read2_bases FROM reference_metrics WHERE id=1').fetchone()==(30,20)
             assert float(db.execute('SELECT Depth FROM reference_records WHERE id=1').fetchone()[0])==57/150
     stub=subprocess.run(base+['--outdir',str(tmp_path/'stub'),'-stub-run'],cwd=tmp_path,

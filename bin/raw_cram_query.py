@@ -18,6 +18,7 @@ for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUME
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 from bin.coverage_core import canonical_reference, read_reference_index, read_reference, window_sums, covered_sums, select_units
+from bin.indexed_reference_metrics import bind_metrics, capacities as indexed_capacities
 from bin.raw_query_sampling import query_arms, compatible_reference_ids, select_nearest_units
 from bin.raw_geometry_cache import cached_extract
 from bin.raw_reference_replacement import resolve_reference_choices, InsufficientReferenceCapacity
@@ -245,6 +246,7 @@ def plan(args):
                     dependencies.append(path)
                 depth_audit = spec["reference_depth_audit"]
                 available, refs = candidates(connection, query, low, min_reference_depth, depth_audit)
+                bind_metrics(connection, refs, config)
                 spec.update(available_count=available, eligible_count=len(refs))
                 if len({r["Sample"] for r in refs}) <= args.min_samples:
                     depth_restricted = (depth_audit["excluded_below_min_reference_depth"] > 0 or
@@ -417,6 +419,11 @@ def calculate(spec, output, *, extractor=extract_once):
         def capacity(ref, arm):
             refid = ref['id']
             if refid not in preflight:
+                from_sql = indexed_capacities(ref, sampling_arms, spec)
+                if from_sql is not None:
+                    preflight[refid] = dict(reference_id=refid, cache_hit=None,
+                                           capacity_source='sqlite', capacities=from_sql)
+                    return from_sql[arm.name]
                 if str(refid) in spec['reference_errors']:
                     raise ValueError(spec['reference_errors'][str(refid)])
                 if os.path.samefile(query['CramPath'], ref['CramFilePath']):
@@ -430,7 +437,7 @@ def calculate(spec, output, *, extractor=extract_once):
                 record_m5("reference", refid, ref["CramFilePath"], candidate, hit)
                 summary['decoded_reference_files'] += int(not hit)
                 summary['geometry_cache_hits'] += int(hit)
-                info = dict(reference_id=refid, cache_hit=hit, capacities={})
+                info = dict(reference_id=refid, cache_hit=hit, capacity_source='geometry', capacities={})
                 for candidate_arm in sampling_arms:
                     eligible = compatible_reference_ids(candidate, candidate_arm.mate_side)
                     info['capacities'][candidate_arm.name] = (

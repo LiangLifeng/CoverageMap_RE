@@ -2,7 +2,7 @@ process CRAM_METRICS_MERGE {
     tag 'cram-index-merge'
     label 'cram_metrics_merge'
     input:
-    path plan, stageAs: 'plan.json'
+    path records, stageAs: 'build_input.csv'
     path shards, stageAs: 'shards/*'
     path fna, stageAs: 'fna.csv'
     path fai, stageAs: 'fai_path.csv'
@@ -13,7 +13,7 @@ process CRAM_METRICS_MERGE {
     script:
     """
     export PATH="\$PWD/metric_code/bin:\$PATH"
-    cram_index_metrics.py merge --plan "${plan}" --chunk-dir shards --fna "${fna}" --fai "${fai}" --output reference_cram.sqlite --min-mapq ${params.index_min_mapq} --m5-policy ${params.index_m5_policy}
+    cram_index_metrics.py merge --records "${records}" --chunk-dir shards --fna "${fna}" --fai "${fai}" --output reference_cram.sqlite --min-mapq ${params.index_min_mapq} --m5-policy ${params.index_m5_policy}
     cat <<-VERSIONS > versions.yml
     "${task.process}":
         cram_index_metrics.py: \$(cram_index_metrics.py --version)

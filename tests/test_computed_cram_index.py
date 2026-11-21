@@ -4,10 +4,9 @@ import json
 from pathlib import Path
 import sqlite3
 
-import numpy as np
 import pytest
 
-from bin.cram_index_metrics import compute, merge, plan
+from bin.cram_index_metrics import compute, merge
 from bin.raw_cram_query import candidates
 
 
@@ -57,14 +56,18 @@ def fixture(tmp_path, kind='bam'):
 
 def build(tmp_path, jobs=1, kind='bam'):
     records,fna,fai,path=fixture(tmp_path,kind)
-    bundle=tmp_path/'plan'
-    plan(records,fna,fai,bundle,2)
+    bundle=tmp_path/'rows'
+    bundle.mkdir()
+    rows=list(csv.DictReader(records.open()))
+    unique={tuple(row[k] for k in ('Sample','CramFilePath','GCFID')) for row in rows}
     chunks=[]
-    for f in sorted((bundle/'chunks').glob('*.jsonl')):
-        output=tmp_path/(f.stem+'.sqlite')
-        compute(f,output,jobs,0,'geometry_only');chunks.append(output)
+    for number,identity in enumerate(sorted(unique),1):
+        row_file=bundle/f'chunk-{number:06d}.json'
+        row_file.write_text(json.dumps([[*identity,str(tmp_path/'GCF_1.1.fna'),str(tmp_path/'GCF_1.1.fna.fai')]]))
+        output=tmp_path/(row_file.stem+'.sqlite')
+        compute(row_file,output,jobs,0,'geometry_only');chunks.append(output)
     output=tmp_path/'final.sqlite'
-    merge(bundle/'plan.json',chunks,fna,fai,output,0,'geometry_only')
+    merge(records,chunks,fna,fai,output,0,'geometry_only')
     return output,chunks,bundle,fna,fai
 
 
@@ -104,8 +107,10 @@ def test_parallel_and_shards_exact(tmp_path):
     a,*_=build(serial,1);b,*_=build(parallel,2)
     for table in ('reference_metrics','reference_mate_audit'):
         with sqlite3.connect(a) as c,sqlite3.connect(b) as d:
-            ar=c.execute(f'SELECT * FROM {table} ORDER BY id').fetchall()
-            br=d.execute(f'SELECT * FROM {table} ORDER BY id').fetchall()
+            fields=[r[1] for r in c.execute(f'PRAGMA table_info({table})') if not r[1].endswith('_mtime_ns')]
+            selected=','.join(fields)
+            ar=c.execute(f'SELECT {selected} FROM {table} ORDER BY id').fetchall()
+            br=d.execute(f'SELECT {selected} FROM {table} ORDER BY id').fetchall()
             if table=='reference_mate_audit':
                 ar=[r[:3]+r[4:] for r in ar];br=[r[:3]+r[4:] for r in br]
             assert ar==br
@@ -114,15 +119,15 @@ def test_parallel_and_shards_exact(tmp_path):
 def test_failure_and_missing_shards_protect_output(tmp_path):
     output,chunks,bundle,fna,fai=build(tmp_path)
     before=output.read_bytes()
-    with pytest.raises(FileExistsError):merge(bundle/'plan.json',chunks,fna,fai,output,0,'geometry_only')
+    with pytest.raises(FileExistsError):merge(tmp_path/'records.csv',chunks,fna,fai,output,0,'geometry_only')
     assert output.read_bytes()==before
     for shards in [chunks[:1],[chunks[0],chunks[0]]]:
-        with pytest.raises(ValueError):merge(bundle/'plan.json',shards,fna,fai,tmp_path/'bad.sqlite',0,'geometry_only')
+        with pytest.raises(ValueError):merge(tmp_path/'records.csv',shards,fna,fai,tmp_path/'bad.sqlite',0,'geometry_only')
         assert not (tmp_path/'bad.sqlite').exists()
-    with pytest.raises(ValueError):merge(bundle/'plan.json',chunks,fna,fai,tmp_path/'bad.sqlite',1,'geometry_only')
+    with pytest.raises(ValueError):merge(tmp_path/'records.csv',chunks,fna,fai,tmp_path/'bad.sqlite',1,'geometry_only')
     assert not (tmp_path/'bad.sqlite').exists()
-    chunk=next((bundle/'chunks').glob('*.jsonl'))
-    specs=chunk.read_text().splitlines();r=json.loads(specs[1]);r['row']['CramFilePath']='/missing.cram';specs[1]=json.dumps(r)
-    broken=tmp_path/'broken.jsonl';broken.write_text('\n'.join(specs)+'\n')
+    chunk=next(bundle.glob('*.json'))
+    rows=json.loads(chunk.read_text());rows[0][1]='/missing.cram'
+    broken=tmp_path/'broken.json';broken.write_text(json.dumps(rows))
     with pytest.raises(OSError):compute(broken,tmp_path/'bad.sqlite',1,0,'geometry_only')
     assert not (tmp_path/'bad.sqlite').exists()
